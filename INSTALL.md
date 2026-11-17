@@ -111,6 +111,30 @@ Type `:date` in any application — it should insert today's date. If the starte
 file was not written because you already had matches, type a trigger from your
 own files.
 
+## Where match files live
+
+hyprspanso reads every `.yml`/`.yaml` file under **`<config>/match/`**, recursively:
+
+| Config root | Matches read from |
+|---|---|
+| default (espanso-compatible) | `~/.config/espanso/match/` |
+| with `XDG_CONFIG_HOME` set | `$XDG_CONFIG_HOME/espanso/match/` |
+| `HYPRSPANSO_CONFIG=/path/to/espanso` | `/path/to/espanso/match/` |
+
+```bash
+mkdir -p ~/.config/espanso/match
+cp examples/matches.yml ~/.config/espanso/match/mine.yml
+hyprspanso reload        # or wait ~2 s, it watches the directory
+```
+
+Notes:
+
+- The file name is free — anything ending in `.yml` or `.yaml`. `hyprspanso init`
+  writes `match/matches.yml`.
+- Subdirectories are read too, so espanso packages (`match/packages/…`) work.
+- Files directly in `~/.config/espanso/` are **ignored**: that is espanso's
+  settings area (`config/default.yml`), not matches.
+
 ## Using your existing snippets
 
 hyprspanso reads espanso's YAML (read-only) from `~/.config/espanso/match/`.

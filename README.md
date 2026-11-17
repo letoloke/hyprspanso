@@ -20,7 +20,8 @@ It reads your existing espanso match files (read-only) and only implements the
   the buffer is cleared on window/workspace changes (`activewindow`).
 
 **New here?** [INSTALL.md](INSTALL.md) covers prerequisites, installation,
-the `CTRL + SPACE` binding, the Omarchy bar widget and troubleshooting.
+where match files live (`~/.config/espanso/match/`), the `CTRL + SPACE`
+binding, the Omarchy bar widget and troubleshooting.
 
 ## What is supported
 
