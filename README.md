@@ -19,6 +19,9 @@ It reads your existing espanso match files (read-only) and only implements the
 * **Layout changes**: followed via Hyprland's `.socket2.sock` (`activelayout`),
   the buffer is cleared on window/workspace changes (`activewindow`).
 
+**New here?** [INSTALL.md](INSTALL.md) covers prerequisites, installation,
+the `CTRL + SPACE` binding, the Omarchy bar widget and troubleshooting.
+
 ## What is supported
 
 | espanso YAML        | hyprspanso |
@@ -71,51 +74,35 @@ espanso's. The search window previews the rendered value.
 Skipped matches are never silently dropped: `hyprspanso check` lists them and
 the daemon logs a summary at startup.
 
-## Requirements
+## Install
 
-* Hyprland (uses its event socket and keymap)
-* `wtype`, `wl-clipboard` (`wl-copy`/`wl-paste`), `libxkbcommon` (`xkbcli`)
-* Your user in the `input` group:
-
-```bash
-sudo usermod -aG input "$USER"   # then log out and back in
-```
-
-## Install without building
-
-Prebuilt x86_64 binary (Arch/Omarchy, glibc):
+**Full guide: [INSTALL.md](INSTALL.md)** — prerequisites, the `input` group,
+keybinding, bar widget and troubleshooting.
 
 ```bash
+# prebuilt x86_64 binary
 curl -LO https://github.com/letoloke/hyprspanso/releases/latest/download/hyprspanso-x86_64-linux.tar.gz
 tar xf hyprspanso-x86_64-linux.tar.gz
 ./install.sh
+
+# or from source
+git clone https://github.com/letoloke/hyprspanso && cd hyprspanso && ./install.sh
+
+# once the AUR package is published
+yay -S hyprspanso
 ```
 
-## Build & install
+Then:
 
 ```bash
-cargo build --release
-./install.sh
-```
-
-`install.sh` installs the binary to `~/.local/bin/hyprspanso` and the systemd
-user unit, but **does not start it** (espanso may still be running).
-
-Enable it:
-
-```bash
-systemctl --user daemon-reload
+sudo usermod -aG input "$USER"           # log out and back in
+systemctl --user disable --now espanso   # if espanso is installed
 systemctl --user enable --now hyprspanso
 ```
 
-Stop espanso first or you get double expansions:
-
-```bash
-systemctl --user disable --now espanso
-```
-
-Rollback is the same in reverse (`systemctl --user disable --now hyprspanso`,
-`systemctl --user enable --now espanso`).
+`install.sh` never starts the daemon by itself, so it cannot fight a running
+espanso. Rollback: `systemctl --user disable --now hyprspanso` and re-enable
+espanso.
 
 ## Hyprland integration
 
