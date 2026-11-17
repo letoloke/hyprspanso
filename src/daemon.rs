@@ -376,7 +376,7 @@ impl Engine {
             eprintln!("hyprspanso: selected trigger no longer exists: {trigger}");
             return;
         };
-        let text = entry.replace.clone();
+        let text = matcher::render(entry);
         let clipboard = entry.force_clipboard || text.chars().count() > 120;
 
         if let Some(address) = target {
@@ -440,11 +440,8 @@ impl Engine {
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
-        let text = matcher::apply_case(
-            &hit.entry.replace,
-            &hit.typed,
-            hit.entry.propagate_case,
-        );
+        let rendered = matcher::render(hit.entry);
+        let text = matcher::apply_case(&rendered, &hit.typed, hit.entry.propagate_case);
         let clipboard = hit.entry.force_clipboard || text.chars().count() > 120;
         let backspaces = hit.backspaces;
 

@@ -29,7 +29,29 @@ It reads your existing espanso match files (read-only) and only implements the
 | `word: true`        | ✅ |
 | `propagate_case`    | ✅ (simple: first letter / ALL CAPS) |
 | `force_clipboard`   | ✅ (via `wl-copy` + paste, clipboard restored) |
-| `vars`, `form`, `type: markdown/image/html`, `script` | ❌ skipped and reported |
+| `vars: type: date`  | ✅ (`format`, `offset`) |
+| `vars: type: echo`  | ✅ |
+| `vars: shell`, `random`, `script`, `form`, `type: markdown/image/html` | ❌ skipped and reported |
+
+### Dynamic matches
+
+```yaml
+- trigger: ":date"
+  replace: "{{fecha}} a las {{hora}}"
+  vars:
+    - name: fecha
+      type: date
+      params:
+        format: "%Y-%m-%d"
+    - name: hora
+      type: date
+      params:
+        format: "%H:%M"
+        offset: 3600        # seconds, for "in one hour"
+```
+
+Templates are rendered when the trigger fires, so identical YAML behaves like
+espanso's. The search window previews the rendered value.
 
 Skipped matches are never silently dropped: `hyprspanso check` lists them and
 the daemon logs a summary at startup.

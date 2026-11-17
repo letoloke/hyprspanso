@@ -22,6 +22,23 @@ pub struct MatchEntry {
     pub source: String,
     /// Full path, so the search window can open it in an editor.
     pub path: PathBuf,
+    /// espanso-style dynamic variables rendered at expansion time.
+    pub vars: Vec<Var>,
+}
+
+/// A `vars:` entry from an espanso match file.
+#[derive(Debug, Clone)]
+pub struct Var {
+    pub name: String,
+    pub kind: VarKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum VarKind {
+    /// `type: date` — strftime `format`, plus an optional `offset` in seconds.
+    Date { format: String, offset: i64 },
+    /// `type: echo` — literal text.
+    Echo { echo: String },
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +221,19 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
             continue;
         };
 
+        let vars = match parse_vars(&map) {
+            Ok(vars) => vars,
+            Err(reason) => {
+                let trigger = first_trigger(&map).unwrap_or_else(|| "<no trigger>".into());
+                set.skipped.push(Skipped {
+                    trigger,
+                    reason,
+                    source: source.clone(),
+                });
+                continue;
+            }
+        };
+
         if let Some(reason) = unsupported(&map) {
             let trigger = first_trigger(&map).unwrap_or_else(|| "<no trigger>".into());
             set.skipped.push(Skipped {
@@ -251,15 +281,13 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
                 force_clipboard,
                 source: source.clone(),
                 path: path.to_path_buf(),
+                vars: vars.clone(),
             });
         }
     }
 }
 
 fn unsupported(map: &serde_yaml::Mapping) -> Option<String> {
-    if map.contains_key("vars") {
-        return Some("uses `vars` (dynamic replacement)".into());
-    }
     if map.contains_key("form") {
         return Some("uses `form` (interactive form)".into());
     }
@@ -275,6 +303,58 @@ fn unsupported(map: &serde_yaml::Mapping) -> Option<String> {
         }
     }
     None
+}
+
+/// Only the variable types we can evaluate without the espanso engine. Anything
+/// else skips the match instead of expanding `{{name}}` literally.
+fn parse_vars(map: &serde_yaml::Mapping) -> Result<Vec<Var>, String> {
+    let Some(Value::Sequence(seq)) = map.get("vars") else {
+        return Ok(Vec::new());
+    };
+
+    let mut vars = Vec::with_capacity(seq.len());
+    for item in seq {
+        let Value::Mapping(spec) = item else {
+            return Err("malformed `vars` entry".into());
+        };
+        let name = spec
+            .get("name")
+            .and_then(scalar)
+            .ok_or_else(|| "var without a `name`".to_string())?;
+        let kind = spec.get("type").and_then(scalar).unwrap_or_default();
+        let params = match spec.get("params") {
+            Some(Value::Mapping(params)) => params.clone(),
+            _ => serde_yaml::Mapping::new(),
+        };
+
+        let var_kind = match kind.as_str() {
+            "date" => {
+                let format = params
+                    .get("format")
+                    .and_then(scalar)
+                    .unwrap_or_else(|| "%Y-%m-%d".to_string());
+                let offset = params
+                    .get("offset")
+                    .and_then(|value| match value {
+                        Value::Number(number) => number.as_i64(),
+                        Value::String(text) => text.trim().parse::<i64>().ok(),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                VarKind::Date { format, offset }
+            }
+            "echo" => VarKind::Echo {
+                echo: params.get("echo").and_then(scalar).unwrap_or_default(),
+            },
+            other => return Err(format!("uses `vars` type `{other}`")),
+        };
+
+        vars.push(Var {
+            name,
+            kind: var_kind,
+        });
+    }
+    Ok(vars)
 }
 
 fn first_trigger(map: &serde_yaml::Mapping) -> Option<String> {

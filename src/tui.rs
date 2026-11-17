@@ -2,6 +2,7 @@
 //! daemon over the IPC socket, then exits so focus returns to where you were.
 
 use crate::config::{self, MatchEntry};
+use crate::matcher;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -278,7 +279,7 @@ impl App {
                 } else {
                     format!("  [{}]", tags.join(","))
                 };
-                let preview = first_line(&entry.replace);
+                let preview = first_line(&matcher::render(entry));
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         entry.trigger.clone(),
@@ -312,7 +313,7 @@ impl App {
                 )),
                 Line::from(""),
             ];
-            for line in entry.replace.split('\n') {
+            for line in matcher::render(entry).split('\n') {
                 lines.push(Line::from(line.to_string()));
             }
             Paragraph::new(lines)
@@ -433,6 +434,7 @@ mod tests {
             force_clipboard: false,
             source: "test".into(),
             path: std::path::PathBuf::from("test.yml"),
+            vars: Vec::new(),
         }
     }
 

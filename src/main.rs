@@ -63,7 +63,8 @@ fn run_list(args: &[String]) -> Result<()> {
                 continue;
             }
         }
-        let preview = entry.replace.lines().next().unwrap_or("");
+        let rendered = matcher::render(entry);
+        let preview = rendered.lines().next().unwrap_or("");
         let preview: String = preview.chars().take(70).collect();
         println!("{:<24} {}", entry.trigger, preview);
     }

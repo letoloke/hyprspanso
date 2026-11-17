@@ -1,6 +1,7 @@
 //! Trigger matching against a small rolling buffer.
 
-use crate::config::MatchEntry;
+use crate::config::{MatchEntry, VarKind};
+use chrono::{DateTime, Duration, Local};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -54,6 +55,29 @@ pub fn find<'a>(entries: &'a [MatchEntry], index: &Index, buffer: &str) -> Optio
     None
 }
 
+/// Render `{{name}}` placeholders for the declared `vars`.
+pub fn render(entry: &MatchEntry) -> String {
+    render_at(entry, Local::now())
+}
+
+pub fn render_at(entry: &MatchEntry, now: DateTime<Local>) -> String {
+    if entry.vars.is_empty() {
+        return entry.replace.clone();
+    }
+    let mut out = entry.replace.clone();
+    for var in &entry.vars {
+        let value = match &var.kind {
+            VarKind::Date { format, offset } => {
+                let stamp = now + Duration::seconds(*offset);
+                stamp.format(format).to_string()
+            }
+            VarKind::Echo { echo } => echo.clone(),
+        };
+        out = out.replace(&format!("{{{{{}}}}}", var.name), &value);
+    }
+    out
+}
+
 /// `propagate_case`: `:Espanso` -> `Hi there!` capitalized, `:ESPANSO` -> all caps.
 pub fn apply_case(text: &str, typed: &str, propagate: bool) -> String {
     if !propagate {
@@ -99,6 +123,7 @@ mod tests {
             force_clipboard: false,
             source: "test".into(),
             path: std::path::PathBuf::from("test.yml"),
+            vars: Vec::new(),
         }
     }
 
@@ -136,6 +161,47 @@ mod tests {
         assert_eq!(apply_case("hello", "HELLO", true), "HELLO");
         assert_eq!(apply_case("hello", "hello", true), "hello");
         assert_eq!(apply_case("hello", "Hello", false), "hello");
+    }
+
+    #[test]
+    fn renders_date_and_echo_vars() {
+        use chrono::TimeZone;
+        use crate::config::{Var, VarKind};
+
+        let mut e = entry(":date", "{{fecha}} a las {{hora}} — {{firma}}");
+        e.vars = vec![
+            Var {
+                name: "fecha".into(),
+                kind: VarKind::Date {
+                    format: "%F".into(),
+                    offset: 0,
+                },
+            },
+            Var {
+                name: "hora".into(),
+                kind: VarKind::Date {
+                    format: "%H:%M".into(),
+                    offset: 3600,
+                },
+            },
+            Var {
+                name: "firma".into(),
+                kind: VarKind::Echo {
+                    echo: "Ricardo".into(),
+                },
+            },
+        ];
+        let now = Local.with_ymd_and_hms(2026, 11, 17, 14, 30, 0).unwrap();
+        assert_eq!(
+            render_at(&e, now),
+            "2026-11-17 a las 15:30 — Ricardo"
+        );
+    }
+
+    #[test]
+    fn leaves_unknown_placeholders_alone() {
+        let e = entry("x", "{{missing}}");
+        assert_eq!(render(&e), "{{missing}}");
     }
 
     #[test]
