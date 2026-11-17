@@ -1,0 +1,22 @@
+[Unit]
+Description=hyprspanso - espanso-compatible text expander for Hyprland
+Documentation=https://github.com/espanso/espanso
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hyprspanso daemon
+Restart=on-failure
+RestartSec=2
+# The daemon only needs the runtime dir, the input devices and your config.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=graphical-session.target
