@@ -9,6 +9,7 @@
 use crate::event::Event;
 use evdev::{Device, EventType, KeyCode};
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,7 @@ pub fn start(tx: Sender<Event>) {
         // suspend/resume), otherwise the evdev node number would be considered
         // "already open" forever and the keyboard would silently stop working.
         let opened: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+        let dedupe = Arc::new(Dedupe::new());
         loop {
             let found = candidates();
             if debug() {
@@ -51,8 +53,9 @@ pub fn start(tx: Sender<Event>) {
                 }
                 let tx = tx.clone();
                 let opened = Arc::clone(&opened);
+                let dedupe = Arc::clone(&dedupe);
                 thread::spawn(move || {
-                    read_device(path.clone(), name, tx);
+                    read_device(path.clone(), name, tx, dedupe);
                     // Give a re-plugged node a moment before retrying it.
                     thread::sleep(Duration::from_secs(1));
                     if let Ok(mut guard) = opened.lock() {
@@ -81,8 +84,15 @@ fn is_keyboard(device: &Device) -> bool {
 /// Several event nodes can expose the same physical keyboard (e.g. a wireless
 /// dongle with an "input0" and an "input2" node). Reading both would duplicate
 /// every character, so group by physical path and keep the richest node.
+/// Every node that can produce keyboard events.
+///
+/// A single physical keyboard can expose several event nodes (a wireless
+/// dongle usually has an "input0" and an "input2"), and which one carries the
+/// letters can change after a re-pair or suspend. Reading all of them and
+/// de-duplicating identical events is more reliable than guessing the "right"
+/// node by capability count.
 fn candidates() -> Vec<(PathBuf, String)> {
-    let mut best: HashMap<String, (PathBuf, String, usize)> = HashMap::new();
+    let mut found = Vec::new();
 
     for (path, device) in evdev::enumerate() {
         if !is_keyboard(&device) {
@@ -93,40 +103,48 @@ fn candidates() -> Vec<(PathBuf, String)> {
         if DENY.iter().any(|deny| lower.contains(deny)) {
             continue;
         }
+        found.push((path, name));
+    }
 
-        let key_count = device
-            .supported_keys()
-            .map(|keys| keys.iter().count())
-            .unwrap_or(0);
+    found.sort();
+    found
+}
 
-        let phys = device.physical_path().unwrap_or("").to_string();
-        let parent = phys
-            .split("/input")
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/')
-            .to_string();
-        let group = if parent.is_empty() {
-            format!("name:{name}")
-        } else {
-            parent
-        };
+/// Two nodes of the same keyboard report the same press within a few
+/// milliseconds. Human typing never repeats an identical key+state that fast,
+/// so anything inside this window is treated as a duplicate.
+const DEDUPE_WINDOW: Duration = Duration::from_millis(10);
 
-        match best.get_mut(&group) {
-            Some(current) if key_count <= current.2 => {}
-            Some(current) => *current = (path, name, key_count),
-            None => {
-                best.insert(group, (path, name, key_count));
-            }
+struct Dedupe {
+    recent: Mutex<HashMap<(u16, i32), Instant>>,
+}
+
+impl Dedupe {
+    fn new() -> Self {
+        Self {
+            recent: Mutex::new(HashMap::new()),
         }
     }
 
-    best.into_values()
-        .map(|(path, name, _)| (path, name))
-        .collect()
+    fn accept(&self, code: u16, value: i32) -> bool {
+        let now = Instant::now();
+        let Ok(mut recent) = self.recent.lock() else {
+            return true;
+        };
+        if let Some(seen) = recent.get(&(code, value)) {
+            if now.duration_since(*seen) < DEDUPE_WINDOW {
+                return false;
+            }
+        }
+        if recent.len() > 256 {
+            recent.retain(|_, seen| now.duration_since(*seen) < Duration::from_secs(1));
+        }
+        recent.insert((code, value), now);
+        true
+    }
 }
 
-fn read_device(path: PathBuf, name: String, tx: Sender<Event>) {
+fn read_device(path: PathBuf, name: String, tx: Sender<Event>, dedupe: Arc<Dedupe>) {
     let mut device = match Device::open(&path) {
         Ok(d) => d,
         Err(err) => {
@@ -142,6 +160,7 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>) {
     if debug() {
         eprintln!("hyprspanso: reader started for {}", path.display());
     }
+    let mut announced = false;
     loop {
         let events = match device.fetch_events() {
             Ok(events) => events,
@@ -159,13 +178,35 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>) {
             if event.event_type() != EventType::KEY {
                 continue;
             }
-            let sent = tx.send(Event::Key {
-                code: event.code(),
-                value: event.value(),
-            });
+            let (code, value) = (event.code(), event.value());
+            if debug() && !announced {
+                announced = true;
+                eprintln!(
+                    "hyprspanso: keys arriving from {} ({name})",
+                    path.display()
+                );
+            }
+            if !dedupe.accept(code, value) {
+                continue;
+            }
+            let sent = tx.send(Event::Key { code, value });
             if sent.is_err() {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedupe_drops_repeated_identical_events() {
+        let dedupe = Dedupe::new();
+        assert!(dedupe.accept(30, 1)); // first press
+        assert!(!dedupe.accept(30, 1)); // same press from a second node
+        assert!(dedupe.accept(30, 0)); // release is a different state
+        assert!(dedupe.accept(31, 1)); // a different key is fine
     }
 }
