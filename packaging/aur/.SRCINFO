@@ -1,6 +1,6 @@
 pkgbase = hyprspanso
 	pkgdesc = espanso-compatible trigger/replace text expander for Hyprland/Wayland
-	pkgver = 0.5.0
+	pkgver = 0.5.1
 	pkgrel = 1
 	url = https://github.com/letoloke/hyprspanso
 	install = hyprspanso.install
@@ -13,7 +13,7 @@ pkgbase = hyprspanso
 	depends = wtype
 	depends = wl-clipboard
 	depends = libxkbcommon
-	source = hyprspanso-0.5.0.tar.gz::https://github.com/letoloke/hyprspanso/archive/refs/tags/v0.5.0.tar.gz
-	sha256sums = 29f46c77ed5e94a59259c748ef0f57f7a41765686fd7b60c6b2c7027c6371c84
+	source = hyprspanso-0.5.1.tar.gz::https://github.com/letoloke/hyprspanso/archive/refs/tags/v0.5.1.tar.gz
+	sha256sums = b05d7d9bab6dbac5393b0745d0ad9f003ec9e1628a401f3437fbb0f76c4d0f12
 
 pkgname = hyprspanso
