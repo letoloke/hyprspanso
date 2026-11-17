@@ -85,8 +85,13 @@ Rollback is the same in reverse (`systemctl --user disable --now hyprspanso`,
 Add to `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + E", "Search snippets", "$HOME/.local/bin/hyprspanso launcher")
+-- CTRL+SPACE is bound by Omarchy (non-consuming, terminal prefix). Take it over:
+hl.unbind("CTRL + SPACE")
+o.bind("CTRL + SPACE", "Search snippets", "$HOME/.local/bin/hyprspanso launcher")
 ```
+
+If espanso is still installed, set `search_shortcut: OFF` in
+`~/.config/espanso/config/default.yml` — otherwise both search windows open.
 
 Add to `~/.config/hypr/hyprland.lua` (or any loaded config file):
 

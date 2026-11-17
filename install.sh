@@ -25,7 +25,8 @@ Next steps:
   1. Make sure your user is in the 'input' group:
        sudo usermod -aG input "\$USER"   # then log out and back in
   2. Add the keybinding (see README.md):
-       o.bind("SUPER + ALT + E", "Search snippets", "\$HOME/.local/bin/hyprspanso launcher")
+       hl.unbind("CTRL + SPACE")
+       o.bind("CTRL + SPACE", "Search snippets", "\$HOME/.local/bin/hyprspanso launcher")
   3. Stop espanso, then enable hyprspanso:
        systemctl --user disable --now espanso
        systemctl --user enable --now hyprspanso
