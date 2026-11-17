@@ -11,7 +11,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use ratatui::Frame;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 pub fn run(target: Option<String>) -> Result<()> {
@@ -99,6 +100,48 @@ impl App {
         self.list_state = ListState::default().with_selected(Some(0));
     }
 
+    /// The file behind the highlighted match; with an empty list, the main
+    /// match file (base.yml/yaml).
+    fn target_file(&self) -> Option<PathBuf> {
+        if let Some(&index) = self.visible.get(self.selected) {
+            return Some(self.entries[index].path.clone());
+        }
+        let dir = config::match_dir(&self.root);
+        for name in ["base.yml", "base.yaml"] {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Leave the TUI for a terminal editor, then come back and reload: the
+    /// file may have gained or lost matches while it was open.
+    fn edit(&mut self, terminal: &mut ratatui::DefaultTerminal, path: &Path) -> Result<()> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+
+        ratatui::restore();
+        let outcome = editor_command(path).status();
+        *terminal = ratatui::init();
+        // Drop keys the editor may have left in the tty buffer, so they do not
+        // land in the query box (or trigger a selection) on the way back.
+        while event::poll(Duration::from_millis(0))? {
+            let _ = event::read()?;
+        }
+        self.reload();
+
+        self.status = match outcome {
+            Ok(status) if status.success() => format!("opened {name}"),
+            Ok(status) => format!("editor exited with {status} ({name})"),
+            Err(err) => format!("cannot start editor: {err}"),
+        };
+        Ok(())
+    }
+
     fn reload(&mut self) {
         let set = config::load(&self.root);
         self.entries = set.entries;
@@ -144,6 +187,11 @@ impl App {
                 KeyCode::PageUp => self.move_by(-10),
                 KeyCode::Char('n') if ctrl => self.move_by(1),
                 KeyCode::Char('p') if ctrl => self.move_by(-1),
+                KeyCode::Char('e') if ctrl => {
+                    if let Some(path) = self.target_file() {
+                        self.edit(terminal, &path)?;
+                    }
+                }
                 KeyCode::Char('u') if ctrl => {
                     self.query.clear();
                     self.refresh();
@@ -285,6 +333,8 @@ impl App {
             Span::raw(" move  "),
             Span::styled("Enter", Style::default().fg(Color::Cyan)),
             Span::raw(" insert  "),
+            Span::styled("Ctrl-E", Style::default().fg(Color::Cyan)),
+            Span::raw(" edit  "),
             Span::styled("Esc", Style::default().fg(Color::Cyan)),
             Span::raw(" quit  "),
             Span::styled("Ctrl-U", Style::default().fg(Color::Cyan)),
@@ -382,6 +432,7 @@ mod tests {
             propagate_case: false,
             force_clipboard: false,
             source: "test".into(),
+            path: std::path::PathBuf::from("test.yml"),
         }
     }
 
@@ -411,4 +462,45 @@ mod tests {
         let by_replace = rank(&entries, "bbva");
         assert_eq!(by_replace.first().copied(), Some(2));
     }
+}
+
+/// $VISUAL, then $EDITOR (run through sh so values like
+/// "omarchy-launch-editor --inline" work), then Omarchy's editor launcher.
+fn editor_command(path: &Path) -> Command {
+    let configured = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+
+    if let Some(editor) = configured {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("exec {editor} \"$1\""))
+            .arg("sh")
+            .arg(path);
+        return cmd;
+    }
+
+    let launcher = if which("omarchy-launch-editor") {
+        "omarchy-launch-editor"
+    } else {
+        "xdg-open"
+    };
+    let mut cmd = Command::new(launcher);
+    cmd.arg(path);
+    cmd
+}
+
+fn which(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(name))
+                .any(|path| path.is_file())
+        })
+        .unwrap_or(false)
 }

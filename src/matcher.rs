@@ -98,6 +98,7 @@ mod tests {
             propagate_case: false,
             force_clipboard: false,
             source: "test".into(),
+            path: std::path::PathBuf::from("test.yml"),
         }
     }
 

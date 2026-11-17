@@ -18,7 +18,10 @@ pub struct MatchEntry {
     pub word: bool,
     pub propagate_case: bool,
     pub force_clipboard: bool,
+    /// File name, for display.
     pub source: String,
+    /// Full path, so the search window can open it in an editor.
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +250,7 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
                 propagate_case,
                 force_clipboard,
                 source: source.clone(),
+                path: path.to_path_buf(),
             });
         }
     }

@@ -127,6 +127,9 @@ the previous configuration instead of crashing the daemon.
 
 * type to fuzzy-filter (matches trigger **and** replacement text)
 * `↑`/`↓` or `Ctrl-N`/`Ctrl-P` to move, `Enter` to insert, `Esc` to cancel
+* `Ctrl-E` opens the highlighted match's file in `$VISUAL`/`$EDITOR`
+  (falls back to `omarchy-launch-editor`, then `xdg-open`); terminal editors are
+  suspended and resumed in place, GUI editors open alongside
 * `Ctrl-U` clear query, `Ctrl-W` delete word, `F5` reload matches
 * expansion is paused while the window is open, so typing in it never triggers
   a snippet
