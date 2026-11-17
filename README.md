@@ -139,3 +139,15 @@ before running it on a shared machine.
 * Apps that ignore `zwp_virtual_keyboard_v1` (some XWayland/Electron windows)
   will not receive injected text; use the clipboard fallback there
   (`force_clipboard: true`), or an X11 tool under XWayland.
+
+## Status
+
+v0.1, developed and tested against Hyprland 0.56 on Omarchy/Arch. The Hyprland
+event names and dispatcher syntax are version-sensitive: 0.56 needs the Lua
+dispatcher form for focusing windows, older versions use `focuswindow`. Both are
+handled, but please open an issue if a Hyprland upgrade breaks it.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+

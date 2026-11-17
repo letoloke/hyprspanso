@@ -2,6 +2,12 @@
 name = "hyprspanso"
 version = "0.1.0"
 edition = "2024"
+description = "espanso-compatible trigger/replace text expander for Hyprland/Wayland"
+license = "MIT"
+repository = "https://github.com/letoloke/hyprspanso"
+readme = "README.md"
+keywords = ["hyprland", "wayland", "espanso", "text-expander", "wayland-compositor"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.104"
