@@ -49,9 +49,9 @@ fn bind_socket(path: &Path) -> Result<UnixListener> {
 }
 
 pub fn run(dry_run: bool) -> Result<()> {
-    let root = config::config_root();
+    let (root, source) = config::resolve_root();
     let set = config::load(&root);
-    print_summary(&root, &set);
+    print_summary(&root, source, &set);
 
     if dry_run {
         println!("\n--dry-run: config looks fine, not starting");
@@ -100,8 +100,21 @@ pub fn run(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_summary(root: &Path, set: &config::MatchSet) {
-    eprintln!("hyprspanso: config root {}", root.display());
+fn print_summary(root: &Path, source: config::RootSource, set: &config::MatchSet) {
+    eprintln!(
+        "hyprspanso: config root {} ({})",
+        root.display(),
+        source.label()
+    );
+    if !config::match_dir(root).is_dir() {
+        eprintln!(
+            "hyprspanso: no match directory at {}",
+            config::match_dir(root).display()
+        );
+        eprintln!(
+            "hyprspanso: run `hyprspanso init --config-dir <folder>` to choose one"
+        );
+    }
     eprintln!("hyprspanso: loaded {}", set.summary());
     for warning in &set.warnings {
         eprintln!("hyprspanso: warning: {warning}");

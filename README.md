@@ -136,6 +136,9 @@ lands back where you were.
 
 ```
 hyprspanso daemon            run the expander
+hyprspanso init              choose the match folder (first run) + examples
+hyprspanso config            show where matches are read from
+hyprspanso config set DIR    point at another folder, saved for next start
 hyprspanso check             validate match files, list skipped matches
 hyprspanso list [filter]     print triggers
 hyprspanso search            fuzzy search TUI (in the current terminal)
@@ -145,9 +148,12 @@ hyprspanso toggle            pause/resume expansion (or: kill -USR1)
 hyprspanso status            daemon state
 ```
 
-Config dir defaults to `$XDG_CONFIG_HOME/espanso`; override with
-`HYPRSPANSO_CONFIG=/path/to/espanso`. The socket is
-`$XDG_RUNTIME_DIR/hyprspanso.sock` (`HYPRSPANSO_SOCKET` to override).
+On first run, `hyprspanso init` asks for the folder that holds your snippets
+(anywhere on disk; it reads `<folder>/match/**`) and saves it in
+`~/.config/hyprspanso/config.json` — no symlink needed. Without a saved folder
+it falls back to `$XDG_CONFIG_HOME/espanso`. `HYPRSPANSO_CONFIG=/path` still
+overrides everything. The socket is `$XDG_RUNTIME_DIR/hyprspanso.sock`
+(`HYPRSPANSO_SOCKET` to override).
 
 Match files are re-read automatically when they change (2 s poll, works on
 synced folders like Insync/Google Drive). A half-written or invalid file keeps

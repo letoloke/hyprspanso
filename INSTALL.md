@@ -62,7 +62,38 @@ yay -S hyprspanso
 hyprspanso init        # three starter examples, only when no matches exist
 ```
 
-## 3. Start it
+## 3. Choose your snippet folder (first run)
+
+hyprspanso can read snippets from **any folder** — it does not have to be
+`~/.config/espanso`, and you do not need a symlink. On the first run it asks
+where they are:
+
+```bash
+hyprspanso init
+# hyprspanso reads every .yml/.yaml under <dir>/match/.
+# Directory [/home/you/.config/espanso]: ~/Documents/snippets
+```
+
+The answer is saved to `~/.config/hyprspanso/config.json`, so the systemd
+service (which has no terminal) finds it on every start. Non-interactive
+installations can pass it directly:
+
+```bash
+hyprspanso init --config-dir ~/Documents/snippets
+hyprspanso config set ~/Documents/snippets   # change it later
+hyprspanso config                            # show what is in effect
+```
+
+Resolution order, highest first:
+
+1. `HYPRSPANSO_CONFIG=/path` (env, temporary override)
+2. the saved `config_dir` in `~/.config/hyprspanso/config.json`
+3. `$XDG_CONFIG_HOME/espanso` (default, espanso-compatible)
+
+`install.sh` runs `hyprspanso init` for you, and the AUR package's post-install
+message points at it.
+
+## 4. Start it
 
 ```bash
 systemctl --user daemon-reload
@@ -75,7 +106,7 @@ hyprspanso status                        # enabled=true matches=N
 `install.sh` deliberately does **not** start the daemon, so it can never fight a
 running espanso.
 
-## 4. Keybinding (Hyprland)
+## 5. Keybinding (Hyprland)
 
 Add to `~/.config/hypr/bindings.lua`:
 
@@ -89,7 +120,7 @@ Then `hyprctl reload` (or just save the file, Hyprland reloads it).
 Pick another key if `CTRL + SPACE` is taken: any free binding works, e.g.
 `SUPER + ALT + E`.
 
-## 5. Optional: Omarchy bar indicator
+## 6. Optional: Omarchy bar indicator
 
 Only for the Omarchy (Quickshell) bar, not plain Hyprland:
 
@@ -101,7 +132,7 @@ A keyboard icon appears next to the clock: solid when expanding, faded when
 paused or stopped. Left click opens the search window, right click pauses,
 middle click reloads the match files.
 
-## 6. Verify
+## 7. Verify
 
 ```bash
 hyprspanso check     # files loaded, matches, and anything skipped
@@ -117,14 +148,15 @@ hyprspanso reads every `.yml`/`.yaml` file under **`<config>/match/`**, recursiv
 
 | Config root | Matches read from |
 |---|---|
+| chosen on first run (`hyprspanso init`) | `<chosen>/match/` |
+| `hyprspanso config set DIR` | `DIR/match/` |
 | default (espanso-compatible) | `~/.config/espanso/match/` |
-| with `XDG_CONFIG_HOME` set | `$XDG_CONFIG_HOME/espanso/match/` |
-| `HYPRSPANSO_CONFIG=/path/to/espanso` | `/path/to/espanso/match/` |
+| `HYPRSPANSO_CONFIG=/path/to/espanso` | `/path/to/espanso/match/` (env wins) |
 
 ```bash
-mkdir -p ~/.config/espanso/match
-cp examples/matches.yml ~/.config/espanso/match/mine.yml
-hyprspanso reload        # or wait ~2 s, it watches the directory
+hyprspanso config                     # which folder is in effect?
+cp examples/matches.yml "$(hyprspanso config | awk '/^matches dir/{print $4}')/mine.yml"
+hyprspanso reload                     # or wait ~2 s, it watches the directory
 ```
 
 Notes:
@@ -137,16 +169,18 @@ Notes:
 
 ## Using your existing snippets
 
-hyprspanso reads espanso's YAML (read-only) from `~/.config/espanso/match/`.
-Bring your snippets over by syncing that folder (e.g. Insync/Drive), or point at
-it explicitly:
+hyprspanso reads espanso's YAML (read-only) from `<folder>/match/`. If your
+snippets live in a synced folder (Insync/Drive, Nextcloud, a git checkout),
+point hyprspanso straight at it — no symlink required:
 
 ```bash
-export HYPRSPANSO_CONFIG="$HOME/path/to/espanso"   # or symlink ~/.config/espanso
+hyprspanso config set "$HOME/Insync/you@example.com/Google Drive/espanso"
+systemctl --user restart hyprspanso
 ```
 
-The daemon reloads on file changes within ~2 s, including files synced by a
-cloud client.
+The folder is stored in `~/.config/hyprspanso/config.json`, so it survives
+reboots and works for the systemd service. The daemon reloads on file changes
+within ~2 s, including files written by a cloud client.
 
 ## Troubleshooting
 

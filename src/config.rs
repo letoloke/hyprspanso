@@ -70,12 +70,119 @@ impl MatchSet {
     }
 }
 
-pub fn config_root() -> PathBuf {
-    if let Ok(p) = std::env::var("HYPRSPANSO_CONFIG") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
+/// Where the path came from, shown by `hyprspanso config` and the daemon log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootSource {
+    Env,
+    Settings,
+    Default,
+}
+
+impl RootSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            RootSource::Env => "HYPRSPANSO_CONFIG",
+            RootSource::Settings => "saved setting",
+            RootSource::Default => "default",
         }
     }
+}
+
+/// hyprspanso's own files (settings, not your snippets).
+pub fn state_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(&p);
+        if !p.trim().is_empty() && path.is_absolute() {
+            return path.join("hyprspanso");
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".config/hyprspanso")
+}
+
+pub fn settings_path() -> PathBuf {
+    state_dir().join("config.json")
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Settings {
+    /// espanso-style directory whose `match/` subdirectory holds the YAML.
+    pub config_dir: Option<PathBuf>,
+}
+
+pub fn load_settings() -> Settings {
+    let path = settings_path();
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Settings::default();
+    };
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("hyprspanso: ignoring {}: {err}", path.display());
+            return Settings::default();
+        }
+    };
+    Settings {
+        config_dir: value
+            .get("config_dir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty()),
+    }
+}
+
+pub fn save_settings(settings: &Settings) -> Result<()> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let value = serde_json::json!({
+        "config_dir": settings
+            .config_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
+    });
+    fs::write(&path, serde_json::to_string_pretty(&value)? + "\n")?;
+    Ok(())
+}
+
+/// `~/x`, `~`, relative and absolute paths from the command line.
+pub fn expand_path(input: &str) -> PathBuf {
+    let trimmed = input.trim();
+    let home = std::env::var("HOME").unwrap_or_default();
+    if trimmed == "~" {
+        return PathBuf::from(home);
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return PathBuf::from(home).join(rest);
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&path))
+            .unwrap_or(path)
+    }
+}
+
+pub fn resolve_root() -> (PathBuf, RootSource) {
+    if let Ok(p) = std::env::var("HYPRSPANSO_CONFIG") {
+        if !p.trim().is_empty() {
+            return (PathBuf::from(p), RootSource::Env);
+        }
+    }
+    if let Some(dir) = load_settings().config_dir {
+        return (dir, RootSource::Settings);
+    }
+    (default_root(), RootSource::Default)
+}
+
+pub fn config_root() -> PathBuf {
+    resolve_root().0
+}
+
+fn default_root() -> PathBuf {
     if let Ok(p) = std::env::var("XDG_CONFIG_HOME") {
         // The spec says relative values must be ignored, and an empty
         // variable is common in shell scripts.
@@ -411,4 +518,21 @@ pub fn check() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_path_keeps_absolute() {
+        assert_eq!(expand_path("/tmp/snippets"), PathBuf::from("/tmp/snippets"));
+    }
+
+    #[test]
+    fn expand_path_makes_relative_absolute() {
+        let path = expand_path("relative/dir");
+        assert!(path.is_absolute(), "{path:?} should be absolute");
+        assert!(path.ends_with("relative/dir"));
+    }
 }

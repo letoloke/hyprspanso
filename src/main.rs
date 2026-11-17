@@ -26,6 +26,7 @@ fn main() -> Result<()> {
         "daemon" => run_daemon(&args),
         "check" => config::check(),
         "init" => run_init(&args),
+        "config" => run_config(&args),
         "list" => run_list(&args),
         "search" => tui::run(flag_value(&args, "--target")),
         "launcher" => run_launcher(),
@@ -50,12 +51,52 @@ fn run_daemon(args: &[String]) -> Result<()> {
 }
 
 fn run_init(args: &[String]) -> Result<()> {
+    use std::io::IsTerminal;
+
     let force = args.iter().any(|a| a == "--force");
-    let root = config::config_root();
-    let match_dir = config::match_dir(&root);
+    let no_input = args.iter().any(|a| a == "--no-input") || !std::io::stdin().is_terminal();
+    let explicit = flag_value(args, "--config-dir").or_else(|| flag_value(args, "--dir"));
+
+    let (current, source) = config::resolve_root();
+
+    let explicit_given = explicit.is_some();
+    let chosen = if let Some(dir) = explicit {
+        config::expand_path(&dir)
+    } else if no_input {
+        current.clone()
+    } else {
+        println!("hyprspanso reads every .yml/.yaml under <dir>/match/.");
+        println!("Point it at your espanso config folder, or at an empty folder to start fresh.");
+        print!("Directory [{}]: ", current.display());
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let line = line.trim();
+        if line.is_empty() {
+            current.clone()
+        } else {
+            config::expand_path(line)
+        }
+    };
+
+    // Persist the choice so the daemon (a systemd service, no terminal) finds
+    // it later without an env var or a symlink.
+    if explicit_given || (!no_input && source != config::RootSource::Env) {
+        let mut settings = config::load_settings();
+        settings.config_dir = Some(chosen.clone());
+        config::save_settings(&settings)?;
+        println!(
+            "Saved config_dir = {} in {}",
+            chosen.display(),
+            config::settings_path().display()
+        );
+    }
+
+    let match_dir = config::match_dir(&chosen);
+    std::fs::create_dir_all(&match_dir)?;
     let target = match_dir.join("matches.yml");
 
-    let existing = config::load(&root);
+    let existing = config::load(&chosen);
     if !force && !existing.files.is_empty() {
         println!(
             "{} already contains {} match file(s); leaving them alone:",
@@ -71,11 +112,52 @@ fn run_init(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    std::fs::create_dir_all(&match_dir)?;
     std::fs::write(&target, EXAMPLES)?;
     println!("Wrote 3 starter examples to {}", target.display());
     println!("Edit the file, then `hyprspanso reload` (or wait 2 seconds).");
     Ok(())
+}
+
+fn run_config(args: &[String]) -> Result<()> {
+    match args.get(1).map(String::as_str) {
+        Some("set") => {
+            let Some(dir) = args.get(2) else {
+                anyhow::bail!("usage: hyprspanso config set <directory>");
+            };
+            let path = config::expand_path(dir);
+            let mut settings = config::load_settings();
+            settings.config_dir = Some(path.clone());
+            config::save_settings(&settings)?;
+            println!("config_dir = {}", path.display());
+            println!("Restart the daemon to apply it: systemctl --user restart hyprspanso");
+            Ok(())
+        }
+        Some("unset") => {
+            let mut settings = config::load_settings();
+            settings.config_dir = None;
+            config::save_settings(&settings)?;
+            println!("Cleared {}", config::settings_path().display());
+            Ok(())
+        }
+        _ => {
+            let (root, source) = config::resolve_root();
+            let set = config::load(&root);
+            println!("config root : {} ({})", root.display(), source.label());
+            println!("matches dir : {}", config::match_dir(&root).display());
+            println!("settings    : {}", config::settings_path().display());
+            println!(
+                "matches     : {} from {} file(s)",
+                set.entries.len(),
+                set.files.len()
+            );
+            if let Ok(env) = std::env::var("HYPRSPANSO_CONFIG") {
+                if !env.trim().is_empty() {
+                    println!("note        : HYPRSPANSO_CONFIG={env} overrides the saved setting");
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn run_list(args: &[String]) -> Result<()> {
@@ -189,7 +271,10 @@ USAGE:
 
 COMMANDS:
     daemon [--dry-run]   Run the expander daemon
-    init [--force]       Write the 3 starter examples to match/matches.yml
+    init [--config-dir DIR] [--force] [--no-input]
+                         Choose the match folder, save it, write the examples
+    config [set DIR|unset]
+                         Show where matches are read from, or change it
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)
@@ -199,8 +284,11 @@ COMMANDS:
     status               Show daemon state
 
 FILES:
-    Matches are read from $XDG_CONFIG_HOME/espanso/match/**
-    `hyprspanso init` writes one file with three examples when none exist.
+    Matches are read from <config-dir>/match/** (default ~/.config/espanso).
+    `hyprspanso init` asks for the folder on first run, saves it in
+    ~/.config/hyprspanso/config.json, and writes three examples if none exist.
+    `hyprspanso config` shows the resolved folder and where it came from.
+    HYPRSPANSO_CONFIG=/path overrides the saved setting.
     Override with HYPRSPANSO_CONFIG=/path/to/espanso
 
 CONFIG FORMAT:
