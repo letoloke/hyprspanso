@@ -18,10 +18,14 @@ use std::time::Duration;
 
 pub fn socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("HYPRSPANSO_SOCKET") {
-        return PathBuf::from(p);
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
     }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/tmp/hyprspanso-{}", unsafe { libc::getuid() }));
+    let runtime = match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(dir) if !dir.trim().is_empty() && Path::new(&dir).is_absolute() => dir,
+        _ => format!("/tmp/hyprspanso-{}", unsafe { libc::getuid() }),
+    };
     PathBuf::from(runtime).join("hyprspanso.sock")
 }
 

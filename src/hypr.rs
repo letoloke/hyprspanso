@@ -102,7 +102,10 @@ pub fn main_layout() -> (String, String) {
 }
 
 pub fn socket_path() -> Option<PathBuf> {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|dir| !dir.trim().is_empty())
+        .unwrap_or_else(|| "/tmp".into());
     let base = PathBuf::from(&runtime).join("hypr");
 
     if let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {

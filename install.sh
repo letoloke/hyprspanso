@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build and install hyprspanso for the current user.
-# Does NOT start or enable the daemon (so it cannot fight a running espanso).
+# Build (or reuse the prebuilt binary) and install hyprspanso for this user.
+# Does NOT start or enable the daemon, so it cannot fight a running espanso.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -8,12 +8,25 @@ cd "$(dirname "$0")"
 BIN_DIR="${HOME}/.local/bin"
 UNIT_DIR="${HOME}/.config/systemd/user"
 
-cargo build --release
+# A source checkout builds from Cargo.toml; the release tarball already
+# contains the compiled binary next to this script.
+if [[ -f Cargo.toml ]]; then
+  cargo build --release
+  BIN=target/release/hyprspanso
+elif [[ -x ./hyprspanso ]]; then
+  BIN=./hyprspanso
+else
+  echo "install.sh: no Cargo.toml and no ./hyprspanso binary" >&2
+  exit 1
+fi
 
-install -Dm755 target/release/hyprspanso "$BIN_DIR/hyprspanso"
+install -Dm755 "$BIN" "$BIN_DIR/hyprspanso"
 install -Dm644 contrib/hyprspanso.service "$UNIT_DIR/hyprspanso.service"
 
 systemctl --user daemon-reload 2>/dev/null || true
+
+# One starter file with three examples, only when no matches exist yet.
+"$BIN_DIR/hyprspanso" init || true
 
 cat <<EOF
 
@@ -30,7 +43,8 @@ Next steps:
   3. Stop espanso, then enable hyprspanso:
        systemctl --user disable --now espanso
        systemctl --user enable --now hyprspanso
-  4. Diagnostics:
+  4. Optional, on Omarchy: ./contrib/omarchy/install-bar-widget.sh
+  5. Diagnostics:
        hyprspanso check
        journalctl --user -u hyprspanso -f
 EOF

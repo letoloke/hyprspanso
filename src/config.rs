@@ -72,10 +72,17 @@ impl MatchSet {
 
 pub fn config_root() -> PathBuf {
     if let Ok(p) = std::env::var("HYPRSPANSO_CONFIG") {
-        return PathBuf::from(p);
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
     }
     if let Ok(p) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(p).join("espanso");
+        // The spec says relative values must be ignored, and an empty
+        // variable is common in shell scripts.
+        let path = PathBuf::from(&p);
+        if !p.trim().is_empty() && path.is_absolute() {
+            return path.join("espanso");
+        }
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".config/espanso")
