@@ -8,6 +8,9 @@ post_install() {
   echo "==> Then start hyprspanso:"
   echo "      systemctl --user enable --now hyprspanso"
   echo
+  echo "==> New here? Install the three starter examples with:"
+  echo "      hyprspanso init"
+  echo
   echo "==> Check the loaded matches with: hyprspanso check"
 }
 
