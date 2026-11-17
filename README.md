@@ -44,6 +44,16 @@ the daemon logs a summary at startup.
 sudo usermod -aG input "$USER"   # then log out and back in
 ```
 
+## Install without building
+
+Prebuilt x86_64 binary (Arch/Omarchy, glibc):
+
+```bash
+curl -LO https://github.com/letoloke/hyprspanso/releases/latest/download/hyprspanso-x86_64-linux.tar.gz
+tar xf hyprspanso-x86_64-linux.tar.gz
+./install.sh
+```
+
 ## Build & install
 
 ```bash
