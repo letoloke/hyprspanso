@@ -15,6 +15,9 @@ use std::process::{Command, Stdio};
 
 const APP_ID: &str = "org.omarchy.hyprspanso";
 
+/// The single starter match file shipped with every install (3 examples).
+const EXAMPLES: &str = include_str!("../examples/matches.yml");
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("help");
@@ -22,6 +25,7 @@ fn main() -> Result<()> {
     match command {
         "daemon" => run_daemon(&args),
         "check" => config::check(),
+        "init" => run_init(&args),
         "list" => run_list(&args),
         "search" => tui::run(flag_value(&args, "--target")),
         "launcher" => run_launcher(),
@@ -43,6 +47,35 @@ fn main() -> Result<()> {
 fn run_daemon(args: &[String]) -> Result<()> {
     let dry_run = args.iter().any(|a| a == "--dry-run");
     daemon::run(dry_run)
+}
+
+fn run_init(args: &[String]) -> Result<()> {
+    let force = args.iter().any(|a| a == "--force");
+    let root = config::config_root();
+    let match_dir = config::match_dir(&root);
+    let target = match_dir.join("matches.yml");
+
+    let existing = config::load(&root);
+    if !force && !existing.files.is_empty() {
+        println!(
+            "{} already contains {} match file(s); leaving them alone:",
+            match_dir.display(),
+            existing.files.len()
+        );
+        for file in &existing.files {
+            println!("  {}", file.display());
+        }
+        println!();
+        println!("Run `hyprspanso init --force` to write the examples anyway");
+        println!("(that overwrites {}).", target.display());
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&match_dir)?;
+    std::fs::write(&target, EXAMPLES)?;
+    println!("Wrote 3 starter examples to {}", target.display());
+    println!("Edit the file, then `hyprspanso reload` (or wait 2 seconds).");
+    Ok(())
 }
 
 fn run_list(args: &[String]) -> Result<()> {
@@ -156,6 +189,7 @@ USAGE:
 
 COMMANDS:
     daemon [--dry-run]   Run the expander daemon
+    init [--force]       Write the 3 starter examples to match/matches.yml
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)
@@ -165,7 +199,8 @@ COMMANDS:
     status               Show daemon state
 
 FILES:
-    Matches are read (read-only) from $XDG_CONFIG_HOME/espanso/match/**
+    Matches are read from $XDG_CONFIG_HOME/espanso/match/**
+    `hyprspanso init` writes one file with three examples when none exist.
     Override with HYPRSPANSO_CONFIG=/path/to/espanso
 
 CONFIG FORMAT:

@@ -1,0 +1,23 @@
+# hyprspanso starter examples — one file, three matches.
+#
+# Files are read from ~/.config/espanso/match/ (same layout as espanso);
+# override the directory with HYPRSPANSO_CONFIG=/path/to/espanso.
+# Edit freely, add more matches, or delete this file.
+
+matches:
+  # 1. Plain text replacement
+  - trigger: ":espanso"
+    replace: "Hi there!"
+
+  # 2. Unicode / special characters
+  - trigger: ":shrug"
+    replace: '¯\_(ツ)_/¯'
+
+  # 3. Dynamic text, rendered when the trigger fires
+  - trigger: ":date"
+    replace: "{{fecha}}"
+    vars:
+      - name: fecha
+        type: date
+        params:
+          format: "%Y-%m-%d"

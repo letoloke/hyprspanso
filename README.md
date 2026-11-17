@@ -33,7 +33,22 @@ It reads your existing espanso match files (read-only) and only implements the
 | `vars: type: echo`  | ✅ |
 | `vars: shell`, `random`, `script`, `form`, `type: markdown/image/html` | ❌ skipped and reported |
 
-### Dynamic matches
+### Starter examples
+
+`hyprspanso init` writes **one file with three examples** to
+`~/.config/espanso/match/matches.yml` — a plain replacement, a unicode one, and
+a dynamic `:date` — but only when the match directory has no `.yml`/`.yaml`
+files yet, so it never touches an existing espanso setup:
+
+```bash
+hyprspanso init            # fresh setups only
+hyprspanso init --force    # overwrite match/matches.yml
+```
+
+The same file is in [`examples/matches.yml`](examples/matches.yml) in the repo.
+`install.sh` runs `hyprspanso init` for you.
+
+## Dynamic matches
 
 ```yaml
 - trigger: ":date"
