@@ -434,6 +434,9 @@ impl Engine {
     }
 
     fn check_match(&mut self) {
+        if debug_keys() {
+            eprintln!("hyprspanso: buffer={:?}", self.buffer);
+        }
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
@@ -445,6 +448,13 @@ impl Engine {
         let clipboard = hit.entry.force_clipboard || text.chars().count() > 120;
         let backspaces = hit.backspaces;
 
+        if debug() {
+            eprintln!(
+                "hyprspanso: matched {:?} -> {:?} ({} backspaces, clipboard={clipboard})",
+                hit.entry.trigger, text, backspaces
+            );
+        }
+
         self.buffer.clear();
         let _ = self.job_tx.send(Job {
             text,
@@ -452,4 +462,12 @@ impl Engine {
             clipboard,
         });
     }
+}
+
+fn debug() -> bool {
+    std::env::var_os("HYPRSPANSO_DEBUG").is_some()
+}
+
+fn debug_keys() -> bool {
+    std::env::var_os("HYPRSPANSO_DEBUG_KEYS").is_some()
 }

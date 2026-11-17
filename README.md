@@ -178,6 +178,23 @@ before running it on a shared machine.
   will not receive injected text; use the clipboard fallback there
   (`force_clipboard: true`), or an X11 tool under XWayland.
 
+## Troubleshooting
+
+Nothing expands?
+
+1. `hyprspanso status` must say `enabled=true` with a non-zero match count.
+2. `hyprspanso check` shows whether a trigger was loaded or skipped (only
+   `trigger`/`triggers` + `replace` are supported).
+3. Wireless keyboards, USB docks and suspend/resume can re-enumerate a
+   keyboard under a recycled `/dev/input/eventN` node. Since 0.2.1 the daemon
+   re-opens those automatically; on older builds restart it.
+4. Some Electron/webview and XWayland apps ignore the virtual keyboard. Add
+   `force_clipboard: true` to that match so hyprspanso pastes instead.
+5. Verbose diagnosis: `systemctl --user edit hyprspanso`, add
+   `[Service]` + `Environment=HYPRSPANSO_DEBUG=1`, restart, and watch
+   `journalctl --user -u hyprspanso -f`. Add `HYPRSPANSO_DEBUG_KEYS=1` to log
+   every decoded key.
+
 ## Status
 
 v0.1, developed and tested against Hyprland 0.56 on Omarchy/Arch. The Hyprland

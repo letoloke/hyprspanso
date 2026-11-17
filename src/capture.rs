@@ -11,6 +11,7 @@ use evdev::{Device, EventType, KeyCode};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -19,18 +20,53 @@ const DENY: &[&str] = &["espanso virtual", "ydotool", "hyprspanso", "wtype"];
 
 pub fn start(tx: Sender<Event>) {
     thread::spawn(move || {
-        let mut opened: HashSet<PathBuf> = HashSet::new();
+        // Paths currently being read. A reader removes its own path when the
+        // device goes away (wireless keyboards re-enumerate, USB resets,
+        // suspend/resume), otherwise the evdev node number would be considered
+        // "already open" forever and the keyboard would silently stop working.
+        let opened: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         loop {
-            for (path, name) in candidates() {
-                if !opened.insert(path.clone()) {
+            let found = candidates();
+            if debug() {
+                eprintln!(
+                    "hyprspanso: scan: {} keyboard device(s): {}",
+                    found.len(),
+                    found
+                        .iter()
+                        .map(|(p, n)| format!("{} ({})", p.display(), n))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            for (path, name) in found {
+                let should_open = opened
+                    .lock()
+                    .map(|mut guard| guard.insert(path.clone()))
+                    .unwrap_or(false);
+                if !should_open {
                     continue;
                 }
+                if debug() {
+                    eprintln!("hyprspanso: opening {} ({})", path.display(), name);
+                }
                 let tx = tx.clone();
-                thread::spawn(move || read_device(path, name, tx));
+                let opened = Arc::clone(&opened);
+                thread::spawn(move || {
+                    read_device(path.clone(), name, tx);
+                    // Give a re-plugged node a moment before retrying it.
+                    thread::sleep(Duration::from_secs(1));
+                    if let Ok(mut guard) = opened.lock() {
+                        guard.remove(&path);
+                    }
+                });
             }
             thread::sleep(Duration::from_secs(3));
         }
     });
+}
+
+fn debug() -> bool {
+    std::env::var_os("HYPRSPANSO_DEBUG").is_some()
 }
 
 fn is_keyboard(device: &Device) -> bool {
@@ -103,10 +139,21 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>) {
         }
     };
 
+    if debug() {
+        eprintln!("hyprspanso: reader started for {}", path.display());
+    }
     loop {
         let events = match device.fetch_events() {
             Ok(events) => events,
-            Err(_) => return,
+            Err(err) => {
+                if debug() {
+                    eprintln!(
+                        "hyprspanso: reader for {} stopped: {err}",
+                        path.display()
+                    );
+                }
+                return;
+            }
         };
         for event in events {
             if event.event_type() != EventType::KEY {
