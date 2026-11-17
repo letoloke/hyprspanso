@@ -1,0 +1,16 @@
+post_install() {
+  echo "==> hyprspanso reads /dev/input directly, so your user needs the 'input' group:"
+  echo "      sudo usermod -aG input <your-user>"
+  echo "    (log out and back in afterwards)"
+  echo
+  echo "==> Stop espanso first, otherwise both will expand the same triggers:"
+  echo "      systemctl --user disable --now espanso"
+  echo "==> Then start hyprspanso:"
+  echo "      systemctl --user enable --now hyprspanso"
+  echo
+  echo "==> Check the loaded matches with: hyprspanso check"
+}
+
+post_upgrade() {
+  post_install
+}
