@@ -128,6 +128,26 @@ Match files are re-read automatically when they change (2 s poll, works on
 synced folders like Insync/Google Drive). A half-written or invalid file keeps
 the previous configuration instead of crashing the daemon.
 
+## Omarchy bar widget
+
+`contrib/omarchy/` contains a status widget for the Omarchy (Quickshell) bar:
+
+![hyprspanso bar widget](contrib/omarchy/bar-widget.png)
+
+```bash
+./contrib/omarchy/install-bar-widget.sh
+```
+
+- solid keyboard icon: daemon running and expanding
+- faded icon: paused, or daemon not running
+- left click: open the search window
+- right click: pause/resume expansion
+- middle click: reload match files
+- hover: match count and state
+
+It installs into `~/.config/omarchy/plugins/letoloke.hyprspanso/`, which is
+user-owned and survives Omarchy updates.
+
 ## Search window
 
 * type to fuzzy-filter (matches trigger **and** replacement text)

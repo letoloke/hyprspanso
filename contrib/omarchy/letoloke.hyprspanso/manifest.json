@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "letoloke.hyprspanso",
+  "name": "hyprspanso",
+  "version": "1.0.0",
+  "author": "Ricardo Molina",
+  "description": "Shows whether the hyprspanso text expander is running and expanding; click opens the snippet search, right-click pauses/resumes it.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "hyprspanso",
+    "description": "Text expander status",
+    "category": "System",
+    "allowMultiple": false
+  }
+}
