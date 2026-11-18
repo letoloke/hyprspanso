@@ -157,10 +157,16 @@ o.bind("CTRL + SPACE", "Search snippets", "$HOME/.local/bin/hyprspanso launcher"
 If espanso is still installed, set `search_shortcut: OFF` in
 `~/.config/espanso/config/default.yml` — otherwise both search windows open.
 
-Add to `~/.config/hypr/hyprland.lua` (or any loaded config file):
+The windows float because of a window rule that `install.sh` adds for you:
+
+```bash
+hyprspanso setup-hyprland          # writes ~/.config/hypr/hyprspanso.lua
+hyprspanso setup-hyprland --print  # just print the snippet
+```
+
+Equivalent rule, if you prefer to add it yourself:
 
 ```lua
--- hyprspanso: floating snippet search window
 o.window("^org\\.omarchy\\.hyprspanso$", {
   float = true, size = "1000 620", center = true,
   rounding = 6, border_size = 2,

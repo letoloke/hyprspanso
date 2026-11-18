@@ -29,6 +29,7 @@ fn main() -> Result<()> {
         "check" => config::check(),
         "init" => run_init(&args),
         "config" => run_config(&args),
+        "setup-hyprland" => run_setup_hyprland(&args),
         "list" => run_list(&args),
         "search" => tui::run(flag_value(&args, "--target")),
         "form" => form::run(
@@ -182,6 +183,93 @@ fn run_config(args: &[String]) -> Result<()> {
     }
 }
 
+const HYPR_LUA_RULE: &str = r#"-- hyprspanso: floating snippet windows (search, picker, forms)
+o.window("^org\\.omarchy\\.hyprspanso$", {
+  float = true,
+  size = "1000 620",
+  center = true,
+  rounding = 6,
+  border_size = 2,
+})"#;
+
+const HYPR_CONF_RULE: &str = r#"# hyprspanso: floating snippet windows (search, picker, forms)
+windowrule = float, class:^(org\.omarchy\.hyprspanso)$
+windowrule = size 1000 620, class:^(org\.omarchy\.hyprspanso)$
+windowrule = center, class:^(org\.omarchy\.hyprspanso)$"#;
+
+/// Install the window rule that makes the search/picker/form windows float.
+/// The TUI runs in a normal terminal window, so without this it opens tiled.
+fn run_setup_hyprland(args: &[String]) -> Result<()> {
+    use std::fs;
+
+    if args.iter().any(|a| a == "--print") {
+        println!("{HYPR_LUA_RULE}\n\n--- or, for a hyprland.conf ---\n\n{HYPR_CONF_RULE}");
+        return Ok(());
+    }
+
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                .join(".config")
+        });
+    let dir = base.join("hypr");
+    let lua = dir.join("hyprland.lua");
+    let conf = dir.join("hyprland.conf");
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if lua.is_file() {
+        let text = fs::read_to_string(&lua)?;
+        if text.contains("hyprspanso") {
+            println!("{} already configures hyprspanso; nothing to do", lua.display());
+        } else {
+            let backup = dir.join(format!("hyprland.lua.bak.{stamp}"));
+            fs::copy(&lua, &backup)?;
+            let module = dir.join("hyprspanso.lua");
+            fs::write(&module, format!("{HYPR_LUA_RULE}\n"))?;
+            fs::write(
+                &lua,
+                format!("{text}\nrequire(\"hypr.hyprspanso\")\n"),
+            )?;
+            println!("wrote {}", module.display());
+            println!("added require(\"hypr.hyprspanso\") to {}", lua.display());
+            println!("backup: {}", backup.display());
+        }
+    } else if conf.is_file() {
+        let text = fs::read_to_string(&conf)?;
+        if text.contains("hyprspanso") {
+            println!("{} already configures hyprspanso; nothing to do", conf.display());
+        } else {
+            let backup = dir.join(format!("hyprland.conf.bak.{stamp}"));
+            fs::copy(&conf, &backup)?;
+            fs::write(&conf, format!("{text}\n{HYPR_CONF_RULE}\n"))?;
+            println!("appended the floating rule to {}", conf.display());
+            println!("backup: {}", backup.display());
+        }
+    } else {
+        println!(
+            "no hyprland.lua or hyprland.conf found in {}; add this by hand:",
+            dir.display()
+        );
+        println!("{HYPR_LUA_RULE}");
+        return Ok(());
+    }
+
+    let _ = Command::new("hyprctl")
+        .arg("reload")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    println!("reloaded Hyprland");
+    Ok(())
+}
+
 fn run_list(args: &[String]) -> Result<()> {
     let filter = args
         .iter()
@@ -300,6 +388,8 @@ COMMANDS:
                          Choose the match folder, save it, write the examples
     config [set DIR|unset]
                          Show where matches are read from, or change it
+    setup-hyprland [--print]
+                         Add the floating-window rule to your Hyprland config
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)

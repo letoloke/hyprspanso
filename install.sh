@@ -28,6 +28,9 @@ systemctl --user daemon-reload 2>/dev/null || true
 # One starter file with three examples, only when no matches exist yet.
 "$BIN_DIR/hyprspanso" init || true
 
+# Floating window rule for the search/picker/form windows.
+"$BIN_DIR/hyprspanso" setup-hyprland || true
+
 cat <<EOF
 
 Installed:

@@ -106,6 +106,27 @@ hyprspanso status                        # enabled=true matches=N
 `install.sh` deliberately does **not** start the daemon, so it can never fight a
 running espanso.
 
+## 4b. Floating windows (Automatic)
+
+The search, picker and form windows run inside a terminal. To make them float
+centred instead of opening tiled, `install.sh` runs:
+
+```bash
+hyprspanso setup-hyprland
+```
+
+It writes `~/.config/hypr/hyprspanso.lua` and adds
+`require("hypr.hyprspanso")` to `hyprland.lua` (or appends a `windowrule` line
+to `hyprland.conf` on non-Omarchy setups), makes a timestamped backup, and
+reloads Hyprland. It is idempotent.
+
+If the windows ever open tiled:
+
+```bash
+hyprspanso setup-hyprland          # add the rule
+hyprspanso setup-hyprland --print  # show the snippet to paste manually
+```
+
 ## 5. Keybinding (Hyprland)
 
 Add to `~/.config/hypr/bindings.lua`:
@@ -259,6 +280,7 @@ Common causes:
 | modifier stuck (text turns uppercase) | a second event node of the same keyboard was replaying presses after the real release; 0.7.1 reads one node per physical keyboard (echo nodes ignored, takeover after 2 s of silence) — upgrade and restart |
 | worked, then stopped silently | run `hyprspanso diag --keys` **before** restarting: `events` frozen means no keys reach the daemon; `events` growing with `held_mods` set means a lost key release; `buffer` staying at 0–1 with `last_decoded` incomplete means something is resetting the buffer (fixed in 0.5.3 for title changes) |
 | several snippets share a trigger | 0.7.0+ opens a picker (previously only the first match was used); type it and choose, or remove the duplicates |
+| search/picker/form window opens tiled | the floating rule is missing: run `hyprspanso setup-hyprland` (install.sh does this since 0.7.2) |
 | form window does not appear | the daemon launches it with `omarchy-launch-tui` (or `xdg-terminal-exec`); check `journalctl --user -u hyprspanso` for `cannot open form window` |
 | triggers fail only in some apps | 0.5.3 fixed window-title changes resetting the trigger buffer (`activewindow` also fires on title updates); upgrade |
 | one match never fires | it uses `vars: shell`/`random`, `form:`, or `type: markdown` — see `hyprspanso check` |
