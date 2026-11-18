@@ -7,7 +7,9 @@ use crate::keymap::Decoder;
 use crate::matcher::{self, Index};
 use anyhow::{bail, Context, Result};
 use evdev::KeyCode;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -219,6 +221,16 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
             target = Some(rest.to_string());
         } else if let Some(rest) = line.strip_prefix("SELECT\t") {
             selection = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("FORM\t") {
+            if let Some((trigger, json)) = rest.split_once('\t') {
+                let values = serde_json::from_str::<HashMap<String, String>>(json)
+                    .unwrap_or_default();
+                let _ = tx.send(Event::FormValues {
+                    trigger: trigger.to_string(),
+                    values,
+                    target: target.clone(),
+                });
+            }
         } else if line == "RELOAD" {
             let _ = tx.send(Event::Reload);
             let _ = writeln!(writer, "ok");
@@ -462,6 +474,11 @@ impl Engine {
             }
             Event::Reload => self.reload(),
             Event::Select { trigger, target } => self.select(&trigger, target.as_deref()),
+            Event::FormValues {
+                trigger,
+                values,
+                target,
+            } => self.form_submit(&trigger, &values, target.as_deref()),
         }
     }
 
@@ -481,6 +498,18 @@ impl Engine {
             eprintln!("hyprspanso: selected trigger no longer exists: {trigger}");
             return;
         };
+        if entry.form.is_some() {
+            let address = target
+                .filter(|address| !address.is_empty())
+                .map(str::to_string)
+                .or_else(|| crate::hypr::active_window().map(|(_, _, a)| a))
+                .unwrap_or_default();
+            if let Err(err) = launch_form_window(&entry.trigger, &address) {
+                eprintln!("hyprspanso: cannot open form window: {err:#}");
+            }
+            return;
+        }
+
         let text = matcher::render(entry);
         let clipboard = entry.force_clipboard || text.chars().count() > 120;
 
@@ -489,6 +518,39 @@ impl Engine {
             thread::sleep(Duration::from_millis(120));
         } else {
             // The TUI terminal is closing; give focus time to come back.
+            thread::sleep(Duration::from_millis(250));
+        }
+
+        let _ = self.job_tx.send(Job {
+            text,
+            backspaces: 0,
+            clipboard,
+        });
+    }
+
+    fn form_submit(
+        &mut self,
+        trigger: &str,
+        values: &HashMap<String, String>,
+        target: Option<&str>,
+    ) {
+        let Some(entry) = self.entries.iter().find(|entry| entry.trigger == trigger) else {
+            eprintln!("hyprspanso: form trigger no longer exists: {trigger}");
+            return;
+        };
+        let Some(spec) = entry.form.as_ref() else {
+            eprintln!("hyprspanso: {trigger} is not a form");
+            return;
+        };
+
+        let text = matcher::render_form(spec, values);
+        let clipboard = text.chars().count() > 120;
+        self.shared.diag.matches.fetch_add(1, Ordering::Relaxed);
+
+        if let Some(address) = target.filter(|address| !address.is_empty()) {
+            crate::hypr::focus_window(address);
+            thread::sleep(Duration::from_millis(120));
+        } else {
             thread::sleep(Duration::from_millis(250));
         }
 
@@ -573,6 +635,26 @@ impl Engine {
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
+        if hit.entry.form.is_some() {
+            // Erase the typed trigger first, like espanso does, then collect
+            // the field values in a separate window.
+            let backspaces = hit.backspaces;
+            let trigger = hit.entry.trigger.clone();
+            let target = crate::hypr::active_window()
+                .map(|(_, _, address)| address)
+                .unwrap_or_default();
+            self.buffer.clear();
+            let _ = self.job_tx.send(Job {
+                text: String::new(),
+                backspaces,
+                clipboard: false,
+            });
+            if let Err(err) = launch_form_window(&trigger, &target) {
+                eprintln!("hyprspanso: cannot open form window: {err:#}");
+            }
+            return;
+        }
+
         let rendered = matcher::render(hit.entry);
         let text = matcher::apply_case(&rendered, &hit.typed, hit.entry.propagate_case);
         let clipboard = hit.entry.force_clipboard || text.chars().count() > 120;
@@ -601,4 +683,46 @@ fn debug() -> bool {
 
 fn debug_keys() -> bool {
     std::env::var_os("HYPRSPANSO_DEBUG_KEYS").is_some()
+}
+
+fn launch_form_window(trigger: &str, target: &str) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?.to_string_lossy().to_string();
+    let mut args: Vec<String> = vec![
+        exe,
+        "form".into(),
+        "--trigger".into(),
+        trigger.into(),
+    ];
+    if !target.is_empty() {
+        args.push("--target".into());
+        args.push(target.into());
+    }
+
+    if which("omarchy-launch-tui") {
+        let mut cmd = Command::new("omarchy-launch-tui");
+        cmd.arg("--app-id=org.omarchy.hyprspanso")
+            .args(&args)
+            .stdin(Stdio::null());
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+
+    Command::new("xdg-terminal-exec")
+        .arg("--app-id=org.omarchy.hyprspanso")
+        .arg("-e")
+        .args(&args)
+        .stdin(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+fn which(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(name))
+                .any(|path| path.is_file())
+        })
+        .unwrap_or(false)
 }

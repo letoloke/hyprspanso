@@ -279,7 +279,10 @@ impl App {
                 } else {
                     format!("  [{}]", tags.join(","))
                 };
-                let preview = first_line(&matcher::render(entry));
+                let preview = match &entry.form {
+                    Some(form) => format!("(form) {}", first_line(&form.template)),
+                    None => first_line(&matcher::render(entry)),
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         entry.trigger.clone(),
@@ -306,14 +309,22 @@ impl App {
 
         let preview = if let Some(&index) = self.visible.get(self.selected) {
             let entry = &self.entries[index];
+            let body = match &entry.form {
+                Some(form) => form.template.clone(),
+                None => matcher::render(entry),
+            };
             let mut lines = vec![
                 Line::from(Span::styled(
                     &entry.trigger,
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 )),
+                Line::from(Span::styled(
+                    if entry.form.is_some() { "interactive form" } else { "" },
+                    Style::default().fg(Color::DarkGray),
+                )),
                 Line::from(""),
             ];
-            for line in matcher::render(entry).split('\n') {
+            for line in body.split('\n') {
                 lines.push(Line::from(line.to_string()));
             }
             Paragraph::new(lines)
@@ -435,6 +446,7 @@ mod tests {
             source: "test".into(),
             path: std::path::PathBuf::from("test.yml"),
             vars: Vec::new(),
+            form: None,
         }
     }
 

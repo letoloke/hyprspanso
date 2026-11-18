@@ -1,6 +1,6 @@
 //! Trigger matching against a small rolling buffer.
 
-use crate::config::{MatchEntry, VarKind};
+use crate::config::{FormSpec, MatchEntry, VarKind};
 use chrono::{DateTime, Duration, Local};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -78,6 +78,16 @@ pub fn render_at(entry: &MatchEntry, now: DateTime<Local>) -> String {
     out
 }
 
+/// Fill a `form:` template with the values the user typed.
+pub fn render_form(spec: &FormSpec, values: &HashMap<String, String>) -> String {
+    let mut out = spec.template.clone();
+    for field in &spec.fields {
+        let value = values.get(&field.name).map(String::as_str).unwrap_or("");
+        out = out.replace(&format!("[[{}]]", field.name), value);
+    }
+    out
+}
+
 /// `propagate_case`: `:Espanso` -> `Hi there!` capitalized, `:ESPANSO` -> all caps.
 pub fn apply_case(text: &str, typed: &str, propagate: bool) -> String {
     if !propagate {
@@ -124,6 +134,7 @@ mod tests {
             source: "test".into(),
             path: std::path::PathBuf::from("test.yml"),
             vars: Vec::new(),
+            form: None,
         }
     }
 
@@ -196,6 +207,32 @@ mod tests {
             render_at(&e, now),
             "2026-11-17 a las 15:30 — Ricardo"
         );
+    }
+
+    #[test]
+    fn renders_form_fields() {
+        use crate::config::{FormField, FormFieldKind};
+
+        let spec = FormSpec {
+            template: "Hola [[name]]!\nSala: [[room]]".into(),
+            fields: vec![
+                FormField {
+                    name: "name".into(),
+                    kind: FormFieldKind::Text,
+                },
+                FormField {
+                    name: "room".into(),
+                    kind: FormFieldKind::Choice {
+                        values: vec!["Búho".into(), "Tortuga".into()],
+                        list: true,
+                    },
+                },
+            ],
+        };
+        let mut values = HashMap::new();
+        values.insert("name".to_string(), "Ana".to_string());
+        values.insert("room".to_string(), "Tortuga".to_string());
+        assert_eq!(render_form(&spec, &values), "Hola Ana!\nSala: Tortuga");
     }
 
     #[test]

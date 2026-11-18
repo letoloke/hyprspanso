@@ -10,4 +10,9 @@ pub enum Event {
     DeviceChanged(String),
     Reload,
     Select { trigger: String, target: Option<String> },
+    FormValues {
+        trigger: String,
+        values: std::collections::HashMap<String, String>,
+        target: Option<String>,
+    },
 }

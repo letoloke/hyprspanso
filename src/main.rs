@@ -2,6 +2,7 @@ mod capture;
 mod config;
 mod daemon;
 mod event;
+mod form;
 mod hypr;
 mod inject;
 mod keymap;
@@ -29,6 +30,7 @@ fn main() -> Result<()> {
         "config" => run_config(&args),
         "list" => run_list(&args),
         "search" => tui::run(flag_value(&args, "--target")),
+        "form" => form::run(flag_value(&args, "--trigger"), flag_value(&args, "--target")),
         "launcher" => run_launcher(),
         "reload" => ipc_command("RELOAD", false),
         "toggle" => ipc_command("TOGGLE", true),
@@ -186,7 +188,10 @@ fn run_list(args: &[String]) -> Result<()> {
                 continue;
             }
         }
-        let rendered = matcher::render(entry);
+        let rendered = match &entry.form {
+            Some(form) => format!("(form) {}", form.template.lines().next().unwrap_or("")),
+            None => matcher::render(entry),
+        };
         let preview = rendered.lines().next().unwrap_or("");
         let preview: String = preview.chars().take(70).collect();
         println!("{:<24} {}", entry.trigger, preview);
@@ -286,6 +291,7 @@ COMMANDS:
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)
+    form --trigger T     Fill a match's `form:` fields (used by the daemon)
     launcher             Open the search window in a floating terminal
     reload               Ask the running daemon to reload match files
     toggle               Enable/disable expansion

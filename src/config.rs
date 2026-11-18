@@ -24,6 +24,29 @@ pub struct MatchEntry {
     pub path: PathBuf,
     /// espanso-style dynamic variables rendered at expansion time.
     pub vars: Vec<Var>,
+    /// An interactive `form:` match: the user fills fields, then the template
+    /// is rendered and inserted.
+    pub form: Option<FormSpec>,
+}
+
+/// An espanso `form:` match.
+#[derive(Debug, Clone)]
+pub struct FormSpec {
+    pub template: String,
+    pub fields: Vec<FormField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormField {
+    pub name: String,
+    pub kind: FormFieldKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum FormFieldKind {
+    Text,
+    Multiline,
+    Choice { values: Vec<String>, list: bool },
 }
 
 /// A `vars:` entry from an espanso match file.
@@ -335,6 +358,8 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
             continue;
         };
 
+        let form = parse_form(&map);
+
         let vars = match parse_vars(&map) {
             Ok(vars) => vars,
             Err(reason) => {
@@ -358,15 +383,16 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
             continue;
         }
 
-        let Some(mut replace) = map.get("replace").and_then(scalar) else {
+        let mut replace = map.get("replace").and_then(scalar).unwrap_or_default();
+        if form.is_none() && !map.contains_key("replace") {
             let trigger = first_trigger(&map).unwrap_or_else(|| "<no trigger>".into());
             set.skipped.push(Skipped {
                 trigger,
-                reason: "no `replace` value".into(),
+                reason: "no `replace` or `form` value".into(),
                 source: source.clone(),
             });
             continue;
-        };
+        }
 
         // `replace: |` keeps a trailing newline; espanso does not type it.
         while replace.ends_with('\n') || replace.ends_with('\r') {
@@ -396,15 +422,13 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
                 source: source.clone(),
                 path: path.to_path_buf(),
                 vars: vars.clone(),
+                form: form.clone(),
             });
         }
     }
 }
 
 fn unsupported(map: &serde_yaml::Mapping) -> Option<String> {
-    if map.contains_key("form") {
-        return Some("uses `form` (interactive form)".into());
-    }
     if let Some(t) = map.get("type") {
         let kind = scalar(t).unwrap_or_default();
         if kind != "text" {
@@ -417,6 +441,73 @@ fn unsupported(map: &serde_yaml::Mapping) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse `form:` + `form_fields:`. Field order follows the placeholders in the
+/// template, because that is the order the user sees in espanso.
+fn parse_form(map: &serde_yaml::Mapping) -> Option<FormSpec> {
+    let template = map.get("form").and_then(scalar)?;
+    let mut template = template;
+    while template.ends_with('\n') || template.ends_with('\r') {
+        template.pop();
+    }
+
+    let defs = match map.get("form_fields") {
+        Some(Value::Mapping(defs)) => defs.clone(),
+        _ => serde_yaml::Mapping::new(),
+    };
+
+    let mut fields: Vec<FormField> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut rest = template.as_str();
+
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else {
+            break;
+        };
+        let token = &after[..end];
+        rest = &after[end + 2..];
+
+        let name = token.split('|').next().unwrap_or("").trim().to_string();
+        if name.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+
+        let kind = match defs.get(name.as_str()) {
+            Some(Value::Mapping(definition)) => {
+                let field_type = definition
+                    .get("type")
+                    .and_then(scalar)
+                    .unwrap_or_default();
+                let multiline = definition
+                    .get("multiline")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                match field_type.as_str() {
+                    "choice" | "list" => {
+                        let values = match definition.get("values") {
+                            Some(Value::Sequence(items)) => {
+                                items.iter().filter_map(scalar).collect()
+                            }
+                            _ => Vec::new(),
+                        };
+                        FormFieldKind::Choice {
+                            values,
+                            list: field_type == "list",
+                        }
+                    }
+                    _ if multiline => FormFieldKind::Multiline,
+                    _ => FormFieldKind::Text,
+                }
+            }
+            _ => FormFieldKind::Text,
+        };
+
+        fields.push(FormField { name, kind });
+    }
+
+    Some(FormSpec { template, fields })
 }
 
 /// Only the variable types we can evaluate without the espanso engine. Anything

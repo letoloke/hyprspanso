@@ -35,7 +35,27 @@ binding, the Omarchy bar widget and troubleshooting.
 | `force_clipboard`   | ✅ (via `wl-copy` + paste, clipboard restored) |
 | `vars: type: date`  | ✅ (`format`, `offset`) |
 | `vars: type: echo`  | ✅ |
-| `vars: shell`, `random`, `script`, `form`, `type: markdown/image/html` | ❌ skipped and reported |
+| `form:` + `form_fields:` (`text`, `choice`, `list`) | ✅ interactive window |
+| `vars: shell`, `random`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
+
+### Interactive forms
+
+A `form:` match opens a small window with one field per `[[placeholder]]`,
+then inserts the rendered template where you were typing:
+
+```yaml
+- trigger: ":hola"
+  form: |
+    Hola [[name]]! Tu habitación es [[room]].
+  form_fields:
+    room:
+      type: choice
+      values: [Búho, Tortuga, Ballena]
+```
+
+`Tab`/`↑↓` move between fields, `←→` pick a choice, `Enter` inserts, `Esc`
+cancels. The right pane previews the result live. The typed trigger is erased
+as soon as the form opens, like espanso.
 
 ### Starter examples
 

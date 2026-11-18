@@ -212,6 +212,7 @@ Common causes:
 | nothing expands, bar says active | user not in `input` group, or the keyboard re-enumerated on an old build — restart the daemon (fixed in 0.2.1) |
 | nothing expands, wireless keyboard | some dongles expose two event nodes (`input0`/`input2`) and a re-pair can move the keys to the other one; 0.5.1+ reads every node and de-duplicates, older builds only read one — upgrade and restart |
 | worked, then stopped silently | run `hyprspanso diag --keys` **before** restarting: `events` frozen means no keys reach the daemon; `events` growing with `held_mods` set means a lost key release; `buffer` staying at 0–1 with `last_decoded` incomplete means something is resetting the buffer (fixed in 0.5.3 for title changes) |
+| form window does not appear | the daemon launches it with `omarchy-launch-tui` (or `xdg-terminal-exec`); check `journalctl --user -u hyprspanso` for `cannot open form window` |
 | triggers fail only in some apps | 0.5.3 fixed window-title changes resetting the trigger buffer (`activewindow` also fires on title updates); upgrade |
 | one match never fires | it uses `vars: shell`/`random`, `form:`, or `type: markdown` — see `hyprspanso check` |
 | text appears in some apps only | Electron/XWayland apps ignore the virtual keyboard; add `force_clipboard: true` to that match |
