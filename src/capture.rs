@@ -10,7 +10,7 @@ use crate::event::Event;
 use evdev::{Device, EventType, KeyCode};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,7 +26,7 @@ pub fn start(tx: Sender<Event>) {
         // suspend/resume), otherwise the evdev node number would be considered
         // "already open" forever and the keyboard would silently stop working.
         let opened: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-        let dedupe = Arc::new(Dedupe::new());
+        let arbiter = Arc::new(NodeArbiter::default());
         let mut next_device_id: u64 = 0;
         let mut last_signature = String::new();
         loop {
@@ -36,7 +36,7 @@ pub fn start(tx: Sender<Event>) {
                 // flood the journal on a long-running daemon.
                 let signature = found
                     .iter()
-                    .map(|(p, n)| format!("{} ({})", p.display(), n))
+                    .map(|(p, n, _)| format!("{} ({})", p.display(), n))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if signature != last_signature {
@@ -48,7 +48,7 @@ pub fn start(tx: Sender<Event>) {
                     last_signature = signature;
                 }
             }
-            for (path, name) in found {
+            for (path, name, group) in found {
                 let should_open = opened
                     .lock()
                     .map(|mut guard| guard.insert(path.clone()))
@@ -61,11 +61,11 @@ pub fn start(tx: Sender<Event>) {
                 }
                 let tx = tx.clone();
                 let opened = Arc::clone(&opened);
-                let dedupe = Arc::clone(&dedupe);
+                let arbiter = Arc::clone(&arbiter);
                 next_device_id += 1;
                 let device_id = next_device_id;
                 thread::spawn(move || {
-                    read_device(path.clone(), name, tx, dedupe, device_id);
+                    read_device(path.clone(), name, group, tx, arbiter, device_id);
                     // Give a re-plugged node a moment before retrying it.
                     thread::sleep(Duration::from_secs(1));
                     if let Ok(mut guard) = opened.lock() {
@@ -101,7 +101,7 @@ fn is_keyboard(device: &Device) -> bool {
 /// letters can change after a re-pair or suspend. Reading all of them and
 /// de-duplicating identical events is more reliable than guessing the "right"
 /// node by capability count.
-fn candidates() -> Vec<(PathBuf, String)> {
+fn candidates() -> Vec<(PathBuf, String, String)> {
     let mut found = Vec::new();
 
     for (path, device) in evdev::enumerate() {
@@ -113,56 +113,75 @@ fn candidates() -> Vec<(PathBuf, String)> {
         if DENY.iter().any(|deny| lower.contains(deny)) {
             continue;
         }
-        found.push((path, name));
+
+        // Nodes belonging to the same physical device share the part of the
+        // physical path before "/inputN".
+        let phys = device.physical_path().unwrap_or("").to_string();
+        let parent = phys
+            .split("/input")
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/')
+            .to_string();
+        let group = if parent.is_empty() {
+            format!("name:{name}")
+        } else {
+            parent
+        };
+
+        found.push((path, name, group));
     }
 
     found.sort();
     found
 }
 
-/// Two nodes of the same keyboard report the same press within a few
-/// milliseconds. Human typing never repeats an identical key+state that fast,
-/// so anything inside this window is treated as a duplicate.
-const DEDUPE_WINDOW: Duration = Duration::from_millis(10);
+/// One physical keyboard can expose several event nodes (a wireless dongle
+/// usually has an `input0` and an `input2`). Only one may be read at a time:
+/// the others are either an identical echo or a *laggy replay* of the same
+/// keys. Reading them together duplicates characters, and a replayed press
+/// arriving after the real release leaves a modifier stuck down.
+///
+/// The first node to produce a key wins its group; another node may take over
+/// once the winner has been silent for a while (device re-pair, suspend).
+const NODE_STALE: Duration = Duration::from_secs(2);
 
-struct Dedupe {
-    recent: Mutex<HashMap<(u16, i32), (u64, Instant)>>,
+#[derive(Default)]
+struct NodeArbiter {
+    active: Mutex<HashMap<String, (PathBuf, Instant)>>,
 }
 
-impl Dedupe {
-    fn new() -> Self {
-        Self {
-            recent: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// `device` identifies the event node. Only *another* node reporting the
-    /// same key and state within the window is treated as a duplicate; a single
-    /// device's own quick press/release (switch chatter) is always delivered,
-    /// otherwise its modifier state can drift from the compositor's.
-    fn accept(&self, device: u64, code: u16, value: i32) -> bool {
-        let now = Instant::now();
-        let Ok(mut recent) = self.recent.lock() else {
+impl NodeArbiter {
+    fn accept(&self, group: &str, path: &Path) -> bool {
+        let Ok(mut active) = self.active.lock() else {
             return true;
         };
-        if let Some((seen_on, seen)) = recent.get(&(code, value)) {
-            if *seen_on != device && now.duration_since(*seen) < DEDUPE_WINDOW {
-                return false;
+        let now = Instant::now();
+        match active.get_mut(group) {
+            Some((owner, last)) => {
+                if owner.as_path() != path {
+                    if now.duration_since(*last) < NODE_STALE {
+                        return false;
+                    }
+                    *owner = path.to_path_buf();
+                }
+                *last = now;
+                true
+            }
+            None => {
+                active.insert(group.to_string(), (path.to_path_buf(), now));
+                true
             }
         }
-        if recent.len() > 256 {
-            recent.retain(|_, (_, seen)| now.duration_since(*seen) < Duration::from_secs(1));
-        }
-        recent.insert((code, value), (device, now));
-        true
     }
 }
 
 fn read_device(
     path: PathBuf,
     name: String,
+    group: String,
     tx: Sender<Event>,
-    dedupe: Arc<Dedupe>,
+    arbiter: Arc<NodeArbiter>,
     device_id: u64,
 ) {
     let mut device = match Device::open(&path) {
@@ -208,7 +227,8 @@ fn read_device(
                     path.display()
                 );
             }
-            if !dedupe.accept(device_id, code, value) {
+            let _ = device_id;
+            if !arbiter.accept(&group, &path) {
                 continue;
             }
             let sent = tx.send(Event::Key { code, value });
@@ -223,13 +243,18 @@ fn read_device(
 mod tests {
     use super::*;
 
+    /// The first node of a physical keyboard is read; an echo node is ignored
+    /// while the winner is active, and can take over once it goes quiet.
     #[test]
-    fn dedupe_drops_repeated_identical_events() {
-        let dedupe = Dedupe::new();
-        assert!(dedupe.accept(1, 30, 1)); // first press
-        assert!(!dedupe.accept(2, 30, 1)); // same press from a second node
-        assert!(dedupe.accept(1, 30, 1)); // the same node may repeat (chatter)
-        assert!(dedupe.accept(1, 30, 0)); // release is a different state
-        assert!(dedupe.accept(1, 31, 1)); // a different key is fine
+    fn arbiter_picks_one_node_per_keyboard() {
+        let arbiter = NodeArbiter::default();
+        let a = PathBuf::from("/dev/input/event13");
+        let b = PathBuf::from("/dev/input/event27");
+        let group = "usb-0000:c6:00.4-1.3";
+
+        assert!(arbiter.accept(group, &a));
+        assert!(!arbiter.accept(group, &b)); // echo while a is active
+        assert!(arbiter.accept(group, &a));
+        assert!(arbiter.accept("other-keyboard", &b)); // different device
     }
 }
