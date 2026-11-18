@@ -9,7 +9,13 @@ pub enum Event {
     /// both, because a release can be lost when a device goes away.
     DeviceChanged(String),
     Reload,
-    Select { trigger: String, target: Option<String> },
+    /// A trigger was chosen (search window, or disambiguation picker).
+    /// `index` selects among entries sharing the same trigger.
+    Choose {
+        trigger: String,
+        index: usize,
+        target: Option<String>,
+    },
     FormValues {
         trigger: String,
         values: std::collections::HashMap<String, String>,

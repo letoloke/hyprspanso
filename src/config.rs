@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use serde_yaml::Value;
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -27,6 +26,9 @@ pub struct MatchEntry {
     /// An interactive `form:` match: the user fills fields, then the template
     /// is rendered and inserted.
     pub form: Option<FormSpec>,
+    /// espanso's `label`: shown instead of the replacement in the search and
+    /// disambiguation windows.
+    pub label: Option<String>,
 }
 
 /// An espanso `form:` match.
@@ -242,21 +244,8 @@ pub fn load(root: &Path) -> MatchSet {
         parse_file(file, &mut set);
     }
 
-    // First definition wins, like espanso's "last loaded" is undefined anyway.
-    let mut seen = HashSet::new();
-    let mut kept = Vec::with_capacity(set.entries.len());
-    for entry in set.entries.drain(..) {
-        if seen.insert(entry.trigger.clone()) {
-            kept.push(entry);
-        } else {
-            set.skipped.push(Skipped {
-                trigger: entry.trigger,
-                reason: "duplicate trigger (kept the first one)".into(),
-                source: entry.source,
-            });
-        }
-    }
-    set.entries = kept;
+    // Duplicate triggers are kept: they form a disambiguation group, like
+    // espanso's picker.
     set.files = files;
     set
 }
@@ -423,6 +412,7 @@ fn parse_file(path: &Path, set: &mut MatchSet) {
                 path: path.to_path_buf(),
                 vars: vars.clone(),
                 form: form.clone(),
+                label: map.get("label").and_then(scalar),
             });
         }
     }

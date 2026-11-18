@@ -36,7 +36,26 @@ binding, the Omarchy bar widget and troubleshooting.
 | `vars: type: date`  | ✅ (`format`, `offset`) |
 | `vars: type: echo`  | ✅ |
 | `form:` + `form_fields:` (`text`, `choice`, `list`) | ✅ interactive window |
+| `label`             | ✅ (search + picker) |
+| duplicate triggers  | ✅ disambiguation picker |
 | `vars: shell`, `random`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
+
+### Match disambiguation
+
+Several matches may share one trigger. Typing it erases the trigger and opens a
+picker with one row per candidate — espanso's behaviour:
+
+```yaml
+- trigger: ":quote"
+  replace: Every moment is a fresh beginning.
+- trigger: ":quote"
+  label: Imagine
+  replace: Everything you can imagine is real.
+```
+
+`↑↓` move, `1-9` pick directly, `Enter` inserts, `Esc` cancels. Rows show the
+`label` when present, otherwise the first line of the replacement (or the form
+template). Your config's many `airfm` variants work this way.
 
 ### Interactive forms
 

@@ -7,6 +7,7 @@ mod hypr;
 mod inject;
 mod keymap;
 mod matcher;
+mod picker;
 mod tui;
 
 use anyhow::{Context, Result};
@@ -30,7 +31,14 @@ fn main() -> Result<()> {
         "config" => run_config(&args),
         "list" => run_list(&args),
         "search" => tui::run(flag_value(&args, "--target")),
-        "form" => form::run(flag_value(&args, "--trigger"), flag_value(&args, "--target")),
+        "form" => form::run(
+            flag_value(&args, "--trigger"),
+            flag_value(&args, "--index")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0),
+            flag_value(&args, "--target"),
+        ),
+        "picker" => picker::run(flag_value(&args, "--trigger"), flag_value(&args, "--target")),
         "launcher" => run_launcher(),
         "reload" => ipc_command("RELOAD", false),
         "toggle" => ipc_command("TOGGLE", true),
@@ -296,6 +304,7 @@ COMMANDS:
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)
     form --trigger T     Fill a match's `form:` fields (used by the daemon)
+    picker --trigger T   Choose between matches sharing a trigger
     launcher             Open the search window in a floating terminal
     reload               Ask the running daemon to reload match files
     toggle               Enable/disable expansion

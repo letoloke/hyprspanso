@@ -26,15 +26,19 @@ struct FieldState {
     index: usize,
 }
 
-pub fn run(trigger: Option<String>, target: Option<String>) -> Result<()> {
+pub fn run(trigger: Option<String>, index: usize, target: Option<String>) -> Result<()> {
     let trigger = trigger.context("missing --trigger")?;
     let root = config::config_root();
     let set = config::load(&root);
 
-    let entry = set
+    let group: Vec<&crate::config::MatchEntry> = set
         .entries
         .iter()
-        .find(|entry| entry.trigger == trigger)
+        .filter(|entry| entry.trigger == trigger)
+        .collect();
+    let entry = group
+        .get(index)
+        .or_else(|| group.first())
         .with_context(|| format!("form trigger {trigger:?} not found"))?;
     let spec = entry.form.clone().context("match has no `form`")?;
 

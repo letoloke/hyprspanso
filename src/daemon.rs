@@ -220,7 +220,7 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
     let mut writer = write_half;
     let reader = BufReader::new(stream);
     let mut target: Option<String> = None;
-    let mut selection: Option<String> = None;
+    let mut selection: Option<(String, usize)> = None;
     // Only the search TUI pauses expansion. Short-lived CLI clients
     // (status/toggle/reload) must not.
     let mut search_guard: Option<SearchGuard> = None;
@@ -235,7 +235,9 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
         } else if let Some(rest) = line.strip_prefix("TARGET\t") {
             target = Some(rest.to_string());
         } else if let Some(rest) = line.strip_prefix("SELECT\t") {
-            selection = Some(rest.to_string());
+            selection = Some(parse_choice(rest));
+        } else if let Some(rest) = line.strip_prefix("PICK\t") {
+            selection = Some(parse_choice(rest));
         } else if let Some(rest) = line.strip_prefix("FORM\t") {
             if let Some((trigger, json)) = rest.split_once('\t') {
                 let values = serde_json::from_str::<HashMap<String, String>>(json)
@@ -318,8 +320,12 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
         }
     }
 
-    if let Some(trigger) = selection {
-        let _ = tx.send(Event::Select { trigger, target });
+    if let Some((trigger, index)) = selection {
+        let _ = tx.send(Event::Choose {
+            trigger,
+            index,
+            target,
+        });
     }
     drop(search_guard);
 }
@@ -507,7 +513,11 @@ impl Engine {
                 self.buffer.clear();
             }
             Event::Reload => self.reload(),
-            Event::Select { trigger, target } => self.select(&trigger, target.as_deref()),
+            Event::Choose {
+                trigger,
+                index,
+                target,
+            } => self.choose(&trigger, index, target.as_deref()),
             Event::FormValues {
                 trigger,
                 values,
@@ -527,8 +537,16 @@ impl Engine {
         self.buffer.clear();
     }
 
-    fn select(&mut self, trigger: &str, target: Option<&str>) {
-        let Some(entry) = self.entries.iter().find(|e| e.trigger == trigger) else {
+    fn entries_for(&self, trigger: &str) -> Vec<&MatchEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.trigger == trigger)
+            .collect()
+    }
+
+    fn choose(&mut self, trigger: &str, index: usize, target: Option<&str>) {
+        let group = self.entries_for(trigger);
+        let Some(entry) = group.get(index).or_else(|| group.first()).copied() else {
             eprintln!("hyprspanso: selected trigger no longer exists: {trigger}");
             return;
         };
@@ -538,7 +556,7 @@ impl Engine {
                 .map(str::to_string)
                 .or_else(|| crate::hypr::active_window().map(|(_, _, a)| a))
                 .unwrap_or_default();
-            if let Err(err) = launch_form_window(&entry.trigger, &address) {
+            if let Err(err) = launch_form_window(&entry.trigger, index, &address) {
                 eprintln!("hyprspanso: cannot open form window: {err:#}");
             }
             return;
@@ -689,6 +707,27 @@ impl Engine {
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
+        {
+            let group = self.entries_for(&hit.entry.trigger);
+            if group.len() > 1 {
+                let backspaces = hit.backspaces;
+                let trigger = hit.entry.trigger.clone();
+                let target = crate::hypr::active_window()
+                    .map(|(_, _, address)| address)
+                    .unwrap_or_default();
+                self.buffer.clear();
+                self.queue(Job {
+                    text: String::new(),
+                    backspaces,
+                    clipboard: false,
+                });
+                if let Err(err) = launch_picker(&trigger, &target) {
+                    eprintln!("hyprspanso: cannot open picker window: {err:#}");
+                }
+                return;
+            }
+        }
+
         if hit.entry.form.is_some() {
             // Erase the typed trigger first, like espanso does, then collect
             // the field values in a separate window.
@@ -703,7 +742,7 @@ impl Engine {
                 backspaces,
                 clipboard: false,
             });
-            if let Err(err) = launch_form_window(&trigger, &target) {
+            if let Err(err) = launch_form_window(&trigger, 0, &target) {
                 eprintln!("hyprspanso: cannot open form window: {err:#}");
             }
             return;
@@ -739,13 +778,15 @@ fn debug_keys() -> bool {
     std::env::var_os("HYPRSPANSO_DEBUG_KEYS").is_some()
 }
 
-fn launch_form_window(trigger: &str, target: &str) -> anyhow::Result<()> {
+fn launch_form_window(trigger: &str, index: usize, target: &str) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?.to_string_lossy().to_string();
     let mut args: Vec<String> = vec![
         exe,
         "form".into(),
         "--trigger".into(),
         trigger.into(),
+        "--index".into(),
+        index.to_string(),
     ];
     if !target.is_empty() {
         args.push("--target".into());
@@ -779,4 +820,42 @@ fn which(name: &str) -> bool {
                 .any(|path| path.is_file())
         })
         .unwrap_or(false)
+}
+
+fn launch_picker(trigger: &str, target: &str) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?.to_string_lossy().to_string();
+    let mut args: Vec<String> = vec![exe, "picker".into(), "--trigger".into(), trigger.into()];
+    if !target.is_empty() {
+        args.push("--target".into());
+        args.push(target.into());
+    }
+
+    if which("omarchy-launch-tui") {
+        let mut cmd = Command::new("omarchy-launch-tui");
+        cmd.arg("--app-id=org.omarchy.hyprspanso")
+            .args(&args)
+            .stdin(Stdio::null());
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+
+    Command::new("xdg-terminal-exec")
+        .arg("--app-id=org.omarchy.hyprspanso")
+        .arg("-e")
+        .args(&args)
+        .stdin(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+/// `trigger` or `trigger\t<index>` from the IPC clients.
+fn parse_choice(rest: &str) -> (String, usize) {
+    match rest.split_once('\t') {
+        Some((trigger, index)) => (
+            trigger.to_string(),
+            index.trim().parse::<usize>().unwrap_or(0),
+        ),
+        None => (rest.to_string(), 0),
+    }
 }

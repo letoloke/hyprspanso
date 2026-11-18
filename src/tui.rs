@@ -81,7 +81,7 @@ impl App {
         }
     }
 
-    fn send_selection(&mut self, trigger: &str) -> Result<()> {
+    fn send_selection(&mut self, trigger: &str, relation: usize) -> Result<()> {
         if self.stream.is_none() && !self.connect() {
             anyhow::bail!("daemon is not running");
         }
@@ -89,7 +89,7 @@ impl App {
         if let Some(target) = &self.target {
             writeln!(stream, "TARGET\t{target}")?;
         }
-        writeln!(stream, "SELECT\t{trigger}")?;
+        writeln!(stream, "SELECT\t{trigger}\t{relation}")?;
         stream.flush()?;
         Ok(())
     }
@@ -174,7 +174,11 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(&index) = self.visible.get(self.selected) {
                         let trigger = self.entries[index].trigger.clone();
-                        match self.send_selection(&trigger) {
+                        let relation = self.entries[..index]
+                            .iter()
+                            .filter(|entry| entry.trigger == trigger)
+                            .count();
+                        match self.send_selection(&trigger, relation) {
                             Ok(()) => return Ok(()),
                             Err(err) => {
                                 self.status = format!("cannot reach daemon: {err}");
@@ -279,9 +283,10 @@ impl App {
                 } else {
                     format!("  [{}]", tags.join(","))
                 };
-                let preview = match &entry.form {
-                    Some(form) => format!("(form) {}", first_line(&form.template)),
-                    None => first_line(&matcher::render(entry)),
+                let preview = match (&entry.label, &entry.form) {
+                    (Some(label), _) => label.clone(),
+                    (None, Some(form)) => format!("(form) {}", first_line(&form.template)),
+                    (None, None) => first_line(&matcher::render(entry)),
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(
@@ -319,7 +324,12 @@ impl App {
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
-                    if entry.form.is_some() { "interactive form" } else { "" },
+                    match (&entry.label, entry.form.is_some()) {
+                        (Some(_), true) => "label · interactive form",
+                        (Some(_), false) => "label",
+                        (None, true) => "interactive form",
+                        (None, false) => "",
+                    },
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(""),
@@ -447,6 +457,7 @@ mod tests {
             path: std::path::PathBuf::from("test.yml"),
             vars: Vec::new(),
             form: None,
+            label: None,
         }
     }
 

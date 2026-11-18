@@ -135,6 +135,7 @@ mod tests {
             path: std::path::PathBuf::from("test.yml"),
             vars: Vec::new(),
             form: None,
+            label: None,
         }
     }
 
