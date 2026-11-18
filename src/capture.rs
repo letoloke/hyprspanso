@@ -27,6 +27,7 @@ pub fn start(tx: Sender<Event>) {
         // "already open" forever and the keyboard would silently stop working.
         let opened: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let dedupe = Arc::new(Dedupe::new());
+        let mut next_device_id: u64 = 0;
         let mut last_signature = String::new();
         loop {
             let found = candidates();
@@ -61,8 +62,10 @@ pub fn start(tx: Sender<Event>) {
                 let tx = tx.clone();
                 let opened = Arc::clone(&opened);
                 let dedupe = Arc::clone(&dedupe);
+                next_device_id += 1;
+                let device_id = next_device_id;
                 thread::spawn(move || {
-                    read_device(path.clone(), name, tx, dedupe);
+                    read_device(path.clone(), name, tx, dedupe, device_id);
                     // Give a re-plugged node a moment before retrying it.
                     thread::sleep(Duration::from_secs(1));
                     if let Ok(mut guard) = opened.lock() {
@@ -123,7 +126,7 @@ fn candidates() -> Vec<(PathBuf, String)> {
 const DEDUPE_WINDOW: Duration = Duration::from_millis(10);
 
 struct Dedupe {
-    recent: Mutex<HashMap<(u16, i32), Instant>>,
+    recent: Mutex<HashMap<(u16, i32), (u64, Instant)>>,
 }
 
 impl Dedupe {
@@ -133,25 +136,35 @@ impl Dedupe {
         }
     }
 
-    fn accept(&self, code: u16, value: i32) -> bool {
+    /// `device` identifies the event node. Only *another* node reporting the
+    /// same key and state within the window is treated as a duplicate; a single
+    /// device's own quick press/release (switch chatter) is always delivered,
+    /// otherwise its modifier state can drift from the compositor's.
+    fn accept(&self, device: u64, code: u16, value: i32) -> bool {
         let now = Instant::now();
         let Ok(mut recent) = self.recent.lock() else {
             return true;
         };
-        if let Some(seen) = recent.get(&(code, value)) {
-            if now.duration_since(*seen) < DEDUPE_WINDOW {
+        if let Some((seen_on, seen)) = recent.get(&(code, value)) {
+            if *seen_on != device && now.duration_since(*seen) < DEDUPE_WINDOW {
                 return false;
             }
         }
         if recent.len() > 256 {
-            recent.retain(|_, seen| now.duration_since(*seen) < Duration::from_secs(1));
+            recent.retain(|_, (_, seen)| now.duration_since(*seen) < Duration::from_secs(1));
         }
-        recent.insert((code, value), now);
+        recent.insert((code, value), (device, now));
         true
     }
 }
 
-fn read_device(path: PathBuf, name: String, tx: Sender<Event>, dedupe: Arc<Dedupe>) {
+fn read_device(
+    path: PathBuf,
+    name: String,
+    tx: Sender<Event>,
+    dedupe: Arc<Dedupe>,
+    device_id: u64,
+) {
     let mut device = match Device::open(&path) {
         Ok(d) => d,
         Err(err) => {
@@ -195,7 +208,7 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>, dedupe: Arc<Dedup
                     path.display()
                 );
             }
-            if !dedupe.accept(code, value) {
+            if !dedupe.accept(device_id, code, value) {
                 continue;
             }
             let sent = tx.send(Event::Key { code, value });
@@ -213,9 +226,10 @@ mod tests {
     #[test]
     fn dedupe_drops_repeated_identical_events() {
         let dedupe = Dedupe::new();
-        assert!(dedupe.accept(30, 1)); // first press
-        assert!(!dedupe.accept(30, 1)); // same press from a second node
-        assert!(dedupe.accept(30, 0)); // release is a different state
-        assert!(dedupe.accept(31, 1)); // a different key is fine
+        assert!(dedupe.accept(1, 30, 1)); // first press
+        assert!(!dedupe.accept(2, 30, 1)); // same press from a second node
+        assert!(dedupe.accept(1, 30, 1)); // the same node may repeat (chatter)
+        assert!(dedupe.accept(1, 30, 0)); // release is a different state
+        assert!(dedupe.accept(1, 31, 1)); // a different key is fine
     }
 }

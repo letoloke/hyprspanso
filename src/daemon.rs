@@ -602,15 +602,17 @@ impl Engine {
             .last_event_ms
             .store(now_ms(), Ordering::Relaxed);
         let key = KeyCode(code);
+        self.decoder.tick();
         let text = self.decoder.feed(code, value);
 
-        if value != 0 {
-            if let Ok(mut keys) = self.shared.diag.recent_keys.lock() {
-                let shown = text.clone().unwrap_or_default();
-                keys.push_back(format!("{code}:{shown}"));
-                while keys.len() > 40 {
-                    keys.pop_front();
-                }
+        if let Ok(mut keys) = self.shared.diag.recent_keys.lock() {
+            let shown = text.clone().unwrap_or_default();
+            keys.push_back(format!(
+                "{code}:{value}:{shown}{}",
+                self.decoder.state_summary()
+            ));
+            while keys.len() > 48 {
+                keys.pop_front();
             }
         }
 
