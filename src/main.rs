@@ -43,6 +43,10 @@ fn main() -> Result<()> {
             },
             true,
         ),
+        "version" | "-V" | "--version" => {
+            println!("hyprspanso {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         "help" | "-h" | "--help" => {
             usage();
             Ok(())
@@ -296,6 +300,7 @@ COMMANDS:
     reload               Ask the running daemon to reload match files
     toggle               Enable/disable expansion
     status               Show daemon state
+    version              Print the installed version
     diag [--keys]        Counters: keys seen, matches, buffer, held modifiers
                          (--keys adds the last 64 decoded characters)
 

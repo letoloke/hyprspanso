@@ -166,6 +166,7 @@ hyprspanso launcher          search TUI in a floating terminal
 hyprspanso reload            reload match files (or: kill -USR2)
 hyprspanso toggle            pause/resume expansion (or: kill -USR1)
 hyprspanso status            daemon state
+hyprspanso --version         installed version
 hyprspanso diag [--keys]     counters: keys seen, matches, held modifiers
 ```
 

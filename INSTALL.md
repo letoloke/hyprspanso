@@ -182,6 +182,51 @@ The folder is stored in `~/.config/hyprspanso/config.json`, so it survives
 reboots and works for the systemd service. The daemon reloads on file changes
 within ~2 s, including files written by a cloud client.
 
+## Updating
+
+Your matches and settings live in `~/.config/espanso` (or wherever you pointed
+`config_dir`) plus `~/.config/hyprspanso/config.json`, so updating only replaces
+the binary and the unit.
+
+### From a git checkout
+
+```bash
+cd hyprspanso
+git pull
+./install.sh
+systemctl --user restart hyprspanso
+```
+
+### From the prebuilt tarball
+
+```bash
+curl -LO https://github.com/letoloke/hyprspanso/releases/latest/download/hyprspanso-x86_64-linux.tar.gz
+tar xf hyprspanso-x86_64-linux.tar.gz
+./install.sh
+systemctl --user restart hyprspanso
+```
+
+### From the AUR
+
+```bash
+yay -Syu hyprspanso
+systemctl --user restart hyprspanso     # pacman does not restart services
+```
+
+**The restart matters**: `install.sh` and pacman replace the file on disk, but
+the running daemon keeps the old code in memory until it is restarted.
+
+### Verify
+
+```bash
+hyprspanso --version
+hyprspanso check
+hyprspanso diag
+```
+
+`install.sh` re-runs `hyprspanso init`, which is a no-op when you already have
+match files, so your snippets are never touched.
+
 ## Troubleshooting
 
 ```bash
