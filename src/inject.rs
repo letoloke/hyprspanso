@@ -3,7 +3,9 @@
 use anyhow::{bail, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -17,12 +19,27 @@ pub struct Job {
     pub clipboard: bool,
 }
 
-pub fn start(rx: Receiver<Job>) {
+/// `pending` counts queued + running injections, so the keyboard engine can
+/// avoid matching while wtype is still typing (otherwise a fast retry gets
+/// interleaved with the previous insertion).
+pub fn start(
+    rx: Receiver<Job>,
+    pending: Arc<AtomicUsize>,
+    ok: Arc<AtomicU64>,
+    failed: Arc<AtomicU64>,
+) {
     thread::spawn(move || {
         while let Ok(job) = rx.recv() {
-            if let Err(err) = run(&job) {
-                eprintln!("hyprspanso: injection failed: {err:#}");
+            match run(&job) {
+                Ok(()) => {
+                    ok.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(err) => {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("hyprspanso: injection failed: {err:#}");
+                }
             }
+            pending.fetch_sub(1, Ordering::SeqCst);
         }
     });
 }

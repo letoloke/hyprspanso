@@ -38,6 +38,8 @@ pub struct Diag {
     events: AtomicU64,
     matches: AtomicU64,
     last_event_ms: AtomicU64,
+    /// Last decoded key presses as `keycode:text`, for `diag --keys`.
+    recent_keys: Mutex<std::collections::VecDeque<String>>,
     buffer_len: AtomicUsize,
     mods: AtomicU64,
     /// Last 64 decoded characters, for `diag --keys`. Memory only.
@@ -56,6 +58,9 @@ pub struct Shared {
     pub enabled: Arc<AtomicBool>,
     pub searching: Arc<AtomicUsize>,
     pub matches: Arc<AtomicUsize>,
+    pub pending: Arc<AtomicUsize>,
+    pub inject_ok: Arc<AtomicU64>,
+    pub inject_failed: Arc<AtomicU64>,
     pub diag: Arc<Diag>,
 }
 
@@ -83,15 +88,25 @@ pub fn run(dry_run: bool) -> Result<()> {
 
     let (tx, rx) = mpsc::channel::<Event>();
     let (job_tx, job_rx) = mpsc::channel::<Job>();
-    inject::start(job_rx);
+
     ensure_wayland_env();
 
     let shared = Shared {
         enabled: Arc::new(AtomicBool::new(true)),
         searching: Arc::new(AtomicUsize::new(0)),
         matches: Arc::new(AtomicUsize::new(set.entries.len())),
+        pending: Arc::new(AtomicUsize::new(0)),
+        inject_ok: Arc::new(AtomicU64::new(0)),
+        inject_failed: Arc::new(AtomicU64::new(0)),
         diag: Arc::new(Diag::default()),
     };
+
+    inject::start(
+        job_rx,
+        Arc::clone(&shared.pending),
+        Arc::clone(&shared.inject_ok),
+        Arc::clone(&shared.inject_failed),
+    );
 
     let sock = socket_path();
     let listener = bind_socket(&sock)?;
@@ -260,25 +275,37 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
                 mods.push("logo");
             }
             let last_chars = if with_keys {
-                shared
+                let decoded = shared
                     .diag
                     .last_chars
                     .lock()
                     .map(|chars| format!(" last_decoded={chars:?}"))
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                let keys = shared
+                    .diag
+                    .recent_keys
+                    .lock()
+                    .map(|keys| {
+                        let joined: Vec<&str> = keys.iter().map(String::as_str).collect();
+                        format!(" raw_keys=[{}]", joined.join(" "))
+                    })
+                    .unwrap_or_default();
+                format!("{decoded}{keys}")
             } else {
                 String::new()
             };
             let _ = writeln!(
                 writer,
-                "events={events} matches={matched} last_event={age} buffer={} held_mods={} matches_loaded={}{last_chars}",
+                "events={events} matches={matched} last_event={age} buffer={} held_mods={} matches_loaded={} inserted={} insert_failed={}{last_chars}",
                 shared.diag.buffer_len.load(Ordering::Relaxed),
                 if mods.is_empty() {
                     "none".to_string()
                 } else {
                     mods.join(",")
                 },
-                shared.matches.load(Ordering::Relaxed)
+                shared.matches.load(Ordering::Relaxed),
+                shared.inject_ok.load(Ordering::Relaxed),
+                shared.inject_failed.load(Ordering::Relaxed)
             );
         } else if line == "STATUS" {
             let _ = writeln!(
@@ -419,6 +446,13 @@ fn is_clear_key(code: KeyCode) -> bool {
 }
 
 impl Engine {
+    fn queue(&self, job: Job) {
+        self.shared.pending.fetch_add(1, Ordering::SeqCst);
+        if self.job_tx.send(job).is_err() {
+            self.shared.pending.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     fn new(
         root: PathBuf,
         entries: Vec<MatchEntry>,
@@ -521,7 +555,7 @@ impl Engine {
             thread::sleep(Duration::from_millis(250));
         }
 
-        let _ = self.job_tx.send(Job {
+        self.queue(Job {
             text,
             backspaces: 0,
             clipboard,
@@ -554,7 +588,7 @@ impl Engine {
             thread::sleep(Duration::from_millis(250));
         }
 
-        let _ = self.job_tx.send(Job {
+        self.queue(Job {
             text,
             backspaces: 0,
             clipboard,
@@ -569,6 +603,16 @@ impl Engine {
             .store(now_ms(), Ordering::Relaxed);
         let key = KeyCode(code);
         let text = self.decoder.feed(code, value);
+
+        if value != 0 {
+            if let Ok(mut keys) = self.shared.diag.recent_keys.lock() {
+                let shown = text.clone().unwrap_or_default();
+                keys.push_back(format!("{code}:{shown}"));
+                while keys.len() > 40 {
+                    keys.pop_front();
+                }
+            }
+        }
 
         if value == 0 {
             self.mods.update(key, false);
@@ -594,6 +638,14 @@ impl Engine {
             || !self.shared.enabled.load(Ordering::SeqCst)
         {
             self.buffer.clear();
+            return;
+        }
+
+        if self.shared.pending.load(Ordering::SeqCst) > 0 {
+            // wtype is still typing the previous replacement; matching now
+            // would interleave and fire a second insertion on top of it.
+            self.buffer.clear();
+            self.record_state();
             return;
         }
 
@@ -644,7 +696,7 @@ impl Engine {
                 .map(|(_, _, address)| address)
                 .unwrap_or_default();
             self.buffer.clear();
-            let _ = self.job_tx.send(Job {
+            self.queue(Job {
                 text: String::new(),
                 backspaces,
                 clipboard: false,
@@ -669,7 +721,7 @@ impl Engine {
         }
 
         self.buffer.clear();
-        let _ = self.job_tx.send(Job {
+        self.queue(Job {
             text,
             backspaces,
             clipboard,
