@@ -503,13 +503,13 @@ impl Engine {
                 }
                 if changed {
                     self.buffer.clear();
-                    self.decoder.reset_modifiers();
+                    self.decoder.reset_state();
                 }
             }
             Event::DeviceChanged(_) => {
                 // A keyboard that re-enumerated can swallow a key release.
                 self.mods.reset();
-                self.decoder.reset_modifiers();
+                self.decoder.reset_state();
                 self.buffer.clear();
             }
             Event::Reload => self.reload(),

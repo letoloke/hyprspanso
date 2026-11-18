@@ -110,6 +110,14 @@ impl Decoder {
             .update_mask(depressed, latched, locked, 0, 0, index);
     }
 
+    /// Throw the whole modifier/latch state away and start from the keymap.
+    /// Stronger than releasing individual keys: it also clears anything that
+    /// ended up latched or locked, which `update_key(Up)` cannot undo.
+    pub fn reset_state(&mut self) {
+        self.state = xkb::State::new(&self.keymap);
+        self.modifier_since = None;
+    }
+
     /// No one holds a modifier for a minute. If the state still thinks one is
     /// down, its release was lost (device re-pair, dropped event): clear it so
     /// typing does not silently turn into uppercase/shortcuts.
@@ -117,7 +125,7 @@ impl Decoder {
         const LIMIT: Duration = Duration::from_secs(60);
         if let Some(since) = self.modifier_since {
             if since.elapsed() > LIMIT {
-                self.reset_modifiers();
+                self.reset_state();
             }
         }
     }
@@ -141,8 +149,11 @@ impl Decoder {
             }
         }
         out.push_str(&format!(
-            "g{}",
-            self.state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE)
+            "g{} d{:x} l{:x} k{:x}",
+            self.state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            self.state.serialize_mods(xkb::STATE_MODS_DEPRESSED),
+            self.state.serialize_mods(xkb::STATE_MODS_LATCHED),
+            self.state.serialize_mods(xkb::STATE_MODS_LOCKED),
         ));
         out
     }
