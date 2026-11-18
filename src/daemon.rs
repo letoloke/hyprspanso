@@ -10,11 +10,11 @@ use evdev::KeyCode;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("HYPRSPANSO_SOCKET") {
@@ -29,11 +29,30 @@ pub fn socket_path() -> PathBuf {
     PathBuf::from(runtime).join("hyprspanso.sock")
 }
 
+/// Counters for `hyprspanso diag`: enough to tell "no keys arriving" from
+/// "keys arriving but nothing matching" without logging what you type.
+#[derive(Default)]
+pub struct Diag {
+    events: AtomicU64,
+    matches: AtomicU64,
+    last_event_ms: AtomicU64,
+    buffer_len: AtomicUsize,
+    mods: AtomicU64,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct Shared {
     pub enabled: Arc<AtomicBool>,
     pub searching: Arc<AtomicUsize>,
     pub matches: Arc<AtomicUsize>,
+    pub diag: Arc<Diag>,
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListener> {
@@ -67,6 +86,7 @@ pub fn run(dry_run: bool) -> Result<()> {
         enabled: Arc::new(AtomicBool::new(true)),
         searching: Arc::new(AtomicUsize::new(0)),
         matches: Arc::new(AtomicUsize::new(set.entries.len())),
+        diag: Arc::new(Diag::default()),
     };
 
     let sock = socket_path();
@@ -204,6 +224,37 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
             let enabled = shared.enabled.load(Ordering::SeqCst);
             shared.enabled.store(!enabled, Ordering::SeqCst);
             let _ = writeln!(writer, "{}", if enabled { "disabled" } else { "enabled" });
+        } else if line == "DIAG" {
+            let events = shared.diag.events.load(Ordering::Relaxed);
+            let matched = shared.diag.matches.load(Ordering::Relaxed);
+            let last = shared.diag.last_event_ms.load(Ordering::Relaxed);
+            let age = if last == 0 {
+                "never".to_string()
+            } else {
+                format!("{}s ago", now_ms().saturating_sub(last) / 1000)
+            };
+            let bits = shared.diag.mods.load(Ordering::Relaxed);
+            let mut mods = Vec::new();
+            if bits & 1 != 0 {
+                mods.push("ctrl");
+            }
+            if bits & 2 != 0 {
+                mods.push("alt");
+            }
+            if bits & 4 != 0 {
+                mods.push("logo");
+            }
+            let _ = writeln!(
+                writer,
+                "events={events} matches={matched} last_event={age} buffer={} held_mods={} matches_loaded={}",
+                shared.diag.buffer_len.load(Ordering::Relaxed),
+                if mods.is_empty() {
+                    "none".to_string()
+                } else {
+                    mods.join(",")
+                },
+                shared.matches.load(Ordering::Relaxed)
+            );
         } else if line == "STATUS" {
             let _ = writeln!(
                 writer,
@@ -371,6 +422,13 @@ impl Engine {
             }
             Event::Window(_, _) => {
                 self.buffer.clear();
+                self.decoder.reset_modifiers();
+            }
+            Event::DeviceChanged(_) => {
+                // A keyboard that re-enumerated can swallow a key release.
+                self.mods.reset();
+                self.decoder.reset_modifiers();
+                self.buffer.clear();
             }
             Event::Reload => self.reload(),
             Event::Select { trigger, target } => self.select(&trigger, target.as_deref()),
@@ -412,6 +470,11 @@ impl Engine {
     }
 
     fn on_key(&mut self, code: u16, value: i32) {
+        self.shared.diag.events.fetch_add(1, Ordering::Relaxed);
+        self.shared
+            .diag
+            .last_event_ms
+            .store(now_ms(), Ordering::Relaxed);
         let key = KeyCode(code);
         let text = self.decoder.feed(code, value);
 
@@ -443,11 +506,24 @@ impl Engine {
         }
 
         let Some(text) = text else {
+            self.record_state();
             return;
         };
         self.buffer.push_str(&text);
         matcher::trim_buffer(&mut self.buffer);
         self.check_match();
+        self.record_state();
+    }
+
+    fn record_state(&self) {
+        let bits = (u64::from(self.mods.ctrl))
+            | (u64::from(self.mods.alt) << 1)
+            | (u64::from(self.mods.logo) << 2);
+        self.shared.diag.mods.store(bits, Ordering::Relaxed);
+        self.shared
+            .diag
+            .buffer_len
+            .store(self.buffer.chars().count(), Ordering::Relaxed);
     }
 
     fn check_match(&mut self) {
@@ -461,6 +537,7 @@ impl Engine {
         let text = matcher::apply_case(&rendered, &hit.typed, hit.entry.propagate_case);
         let clipboard = hit.entry.force_clipboard || text.chars().count() > 120;
         let backspaces = hit.backspaces;
+        self.shared.diag.matches.fetch_add(1, Ordering::Relaxed);
 
         if debug() {
             eprintln!(

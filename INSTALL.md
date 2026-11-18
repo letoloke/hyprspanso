@@ -186,6 +186,7 @@ within ~2 s, including files written by a cloud client.
 
 ```bash
 hyprspanso status                 # running/enabled and match count
+hyprspanso diag                   # keys seen, matches, buffer, held modifiers
 hyprspanso check                  # config loaded? anything skipped?
 systemctl --user restart hyprspanso
 journalctl --user -u hyprspanso -f
@@ -209,6 +210,7 @@ Common causes:
 |---|---|
 | nothing expands, bar says active | user not in `input` group, or the keyboard re-enumerated on an old build — restart the daemon (fixed in 0.2.1) |
 | nothing expands, wireless keyboard | some dongles expose two event nodes (`input0`/`input2`) and a re-pair can move the keys to the other one; 0.5.1+ reads every node and de-duplicates, older builds only read one — upgrade and restart |
+| worked, then stopped silently | run `hyprspanso diag` **before** restarting: `events` frozen means no keys reach the daemon; `events` growing with `held_mods` set means a key release was lost during a device re-pair (0.5.2 resets modifiers when a device is reopened or focus changes) |
 | one match never fires | it uses `vars: shell`/`random`, `form:`, or `type: markdown` — see `hyprspanso check` |
 | text appears in some apps only | Electron/XWayland apps ignore the virtual keyboard; add `force_clipboard: true` to that match |
 | triggers expand twice | both espanso and hyprspanso are running — stop one |

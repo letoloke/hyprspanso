@@ -27,18 +27,25 @@ pub fn start(tx: Sender<Event>) {
         // "already open" forever and the keyboard would silently stop working.
         let opened: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let dedupe = Arc::new(Dedupe::new());
+        let mut last_signature = String::new();
         loop {
             let found = candidates();
             if debug() {
-                eprintln!(
-                    "hyprspanso: scan: {} keyboard device(s): {}",
-                    found.len(),
-                    found
-                        .iter()
-                        .map(|(p, n)| format!("{} ({})", p.display(), n))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                // Only log when the device set changes: a per-3s line would
+                // flood the journal on a long-running daemon.
+                let signature = found
+                    .iter()
+                    .map(|(p, n)| format!("{} ({})", p.display(), n))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if signature != last_signature {
+                    eprintln!(
+                        "hyprspanso: scan: {} keyboard device(s): {}",
+                        found.len(),
+                        signature
+                    );
+                    last_signature = signature;
+                }
             }
             for (path, name) in found {
                 let should_open = opened
@@ -160,6 +167,7 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>, dedupe: Arc<Dedup
     if debug() {
         eprintln!("hyprspanso: reader started for {}", path.display());
     }
+    let _ = tx.send(Event::DeviceChanged(name.clone()));
     let mut announced = false;
     loop {
         let events = match device.fetch_events() {
@@ -171,6 +179,7 @@ fn read_device(path: PathBuf, name: String, tx: Sender<Event>, dedupe: Arc<Dedup
                         path.display()
                     );
                 }
+                let _ = tx.send(Event::DeviceChanged(name.clone()));
                 return;
             }
         };

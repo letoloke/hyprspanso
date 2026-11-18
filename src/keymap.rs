@@ -99,6 +99,17 @@ impl Decoder {
             .update_mask(depressed, latched, locked, 0, 0, index);
     }
 
+    /// Drop any modifier the state still believes is held. A key release can
+    /// be lost when a keyboard re-enumerates (wireless dongle, USB reset),
+    /// which otherwise leaves everything shifted/control'd until a restart.
+    pub fn reset_modifiers(&mut self) {
+        const MODIFIERS: [u16; 8] = [29, 97, 42, 54, 56, 100, 125, 126];
+        for code in MODIFIERS {
+            let keycode = xkb::Keycode::new(u32::from(code) + 8);
+            self.state.update_key(keycode, xkb::KeyDirection::Up);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn keymap(&self) -> &xkb::Keymap {
         &self.keymap

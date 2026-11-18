@@ -33,6 +33,7 @@ fn main() -> Result<()> {
         "reload" => ipc_command("RELOAD", false),
         "toggle" => ipc_command("TOGGLE", true),
         "status" => ipc_command("STATUS", true),
+        "diag" => ipc_command("DIAG", true),
         "help" | "-h" | "--help" => {
             usage();
             Ok(())
@@ -282,6 +283,7 @@ COMMANDS:
     reload               Ask the running daemon to reload match files
     toggle               Enable/disable expansion
     status               Show daemon state
+    diag                 Counters: keys seen, matches, buffer, held modifiers
 
 FILES:
     Matches are read from <config-dir>/match/** (default ~/.config/espanso).
