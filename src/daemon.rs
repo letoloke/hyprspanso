@@ -12,7 +12,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,8 @@ pub struct Diag {
     last_event_ms: AtomicU64,
     buffer_len: AtomicUsize,
     mods: AtomicU64,
+    /// Last 64 decoded characters, for `diag --keys`. Memory only.
+    last_chars: Mutex<String>,
 }
 
 fn now_ms() -> u64 {
@@ -224,7 +226,8 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
             let enabled = shared.enabled.load(Ordering::SeqCst);
             shared.enabled.store(!enabled, Ordering::SeqCst);
             let _ = writeln!(writer, "{}", if enabled { "disabled" } else { "enabled" });
-        } else if line == "DIAG" {
+        } else if line == "DIAG" || line == "DIAG_KEYS" {
+            let with_keys = line == "DIAG_KEYS";
             let events = shared.diag.events.load(Ordering::Relaxed);
             let matched = shared.diag.matches.load(Ordering::Relaxed);
             let last = shared.diag.last_event_ms.load(Ordering::Relaxed);
@@ -244,9 +247,19 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
             if bits & 4 != 0 {
                 mods.push("logo");
             }
+            let last_chars = if with_keys {
+                shared
+                    .diag
+                    .last_chars
+                    .lock()
+                    .map(|chars| format!(" last_decoded={chars:?}"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 writer,
-                "events={events} matches={matched} last_event={age} buffer={} held_mods={} matches_loaded={}",
+                "events={events} matches={matched} last_event={age} buffer={} held_mods={} matches_loaded={}{last_chars}",
                 shared.diag.buffer_len.load(Ordering::Relaxed),
                 if mods.is_empty() {
                     "none".to_string()
@@ -337,6 +350,8 @@ struct Engine {
     index: Index,
     decoder: Decoder,
     buffer: String,
+    last_focus: Option<String>,
+    last_focus_class: String,
     mods: Mods,
     job_tx: Sender<Job>,
     shared: Shared,
@@ -406,6 +421,8 @@ impl Engine {
             index,
             decoder,
             buffer: String::new(),
+            last_focus: None,
+            last_focus_class: String::new(),
             mods: Mods::default(),
             job_tx,
             shared,
@@ -420,9 +437,22 @@ impl Engine {
                 self.buffer.clear();
                 self.mods.reset();
             }
-            Event::Window(_, _) => {
-                self.buffer.clear();
-                self.decoder.reset_modifiers();
+            Event::Focus { address, class } => {
+                let changed = if !address.is_empty() {
+                    self.last_focus.as_deref() != Some(address.as_str())
+                } else {
+                    !class.is_empty() && class != self.last_focus_class
+                };
+                if !address.is_empty() {
+                    self.last_focus = Some(address);
+                }
+                if !class.is_empty() {
+                    self.last_focus_class = class;
+                }
+                if changed {
+                    self.buffer.clear();
+                    self.decoder.reset_modifiers();
+                }
             }
             Event::DeviceChanged(_) => {
                 // A keyboard that re-enumerated can swallow a key release.
@@ -511,6 +541,16 @@ impl Engine {
         };
         self.buffer.push_str(&text);
         matcher::trim_buffer(&mut self.buffer);
+        if let Ok(mut last) = self.shared.diag.last_chars.lock() {
+            last.push_str(&text);
+            let count = last.chars().count();
+            if count > 64 {
+                let cut = count - 64;
+                if let Some((byte, _)) = last.char_indices().nth(cut) {
+                    last.drain(..byte);
+                }
+            }
+        }
         self.check_match();
         self.record_state();
     }

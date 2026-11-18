@@ -2,8 +2,9 @@
 pub enum Event {
     Key { code: u16, value: i32 },
     Layout(String),
-    #[allow(dead_code)]
-    Window(String, String),
+    /// Focus event. `address` comes from `activewindowv2` (empty when the
+    /// compositor only sent `activewindow`); `class` from `activewindow`.
+    Focus { address: String, class: String },
     /// A keyboard node started/stopped being read. Modifier state is reset on
     /// both, because a release can be lost when a device goes away.
     DeviceChanged(String),

@@ -130,7 +130,9 @@ pub fn socket_path() -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
-/// Streams `activelayout` and `activewindow` events into the engine.
+/// Streams `activelayout`, `activewindowv2` and `activewindow` events into the
+/// engine. `activewindow` also fires when a window *title* changes, so focus
+/// changes are detected by address/class instead of by event arrival.
 pub fn spawn_listener(tx: Sender<Event>) {
     thread::spawn(move || loop {
         let Some(path) = socket_path() else {
@@ -156,10 +158,23 @@ pub fn spawn_listener(tx: Sender<Event>) {
                         return;
                     }
                 }
-            } else if let Some(rest) = line.strip_prefix("activewindow>>") {
-                let (class, title) = rest.split_once(',').unwrap_or((rest, ""));
+            } else if let Some(rest) = line.strip_prefix("activewindowv2>>") {
                 if tx
-                    .send(Event::Window(class.to_string(), title.to_string()))
+                    .send(Event::Focus {
+                        address: rest.trim().to_string(),
+                        class: String::new(),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            } else if let Some(rest) = line.strip_prefix("activewindow>>") {
+                let (class, _title) = rest.split_once(',').unwrap_or((rest, ""));
+                if tx
+                    .send(Event::Focus {
+                        address: String::new(),
+                        class: class.to_string(),
+                    })
                     .is_err()
                 {
                     return;
