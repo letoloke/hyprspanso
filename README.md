@@ -42,6 +42,18 @@ binding, the Omarchy bar widget and troubleshooting.
 | duplicate triggers  | ✅ disambiguation picker |
 | `vars: shell`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
 
+### Finding duplicates
+
+```bash
+hyprspanso duplicates              # same replacement text, different triggers
+hyprspanso duplicates --triggers   # same trigger (the disambiguation groups)
+hyprspanso duplicates --exact      # same trigger AND same output (redundant)
+```
+
+Each group lists the trigger and the file it came from. Matches with dynamic
+templates (`{{date}}`, `vars:` …) are ignored for output comparison because
+they render differently every time; `hyprspanso check` prints the group counts.
+
 ### Match disambiguation
 
 Several matches may share one trigger. Typing it erases the trigger and opens a
@@ -210,6 +222,9 @@ hyprspanso config            show where matches are read from
 hyprspanso config set DIR    point at another folder, saved for next start
 hyprspanso check             validate match files, list skipped matches
 hyprspanso list [filter]     print triggers
+hyprspanso duplicates        find matches sharing an output text
+hyprspanso duplicates --triggers   find matches sharing a trigger
+hyprspanso duplicates --exact      same trigger *and* same output
 hyprspanso search            fuzzy search TUI (in the current terminal)
 hyprspanso launcher          search TUI in a floating terminal
 hyprspanso reload            reload match files (or: kill -USR2)

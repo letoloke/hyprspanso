@@ -610,6 +610,12 @@ pub fn check() -> Result<()> {
     println!("files       : {}", set.files.len());
     println!("matches     : {}", set.entries.len());
     println!("skipped     : {}", set.skipped.len());
+    println!(
+        "duplicates  : {} output group(s), {} trigger group(s), {} exact",
+        duplicate_output_groups(&set.entries).len(),
+        duplicate_trigger_groups(&set.entries).len(),
+        exact_duplicate_groups(&set.entries).len()
+    );
 
     if !set.warnings.is_empty() {
         println!("\nwarnings:");
@@ -640,5 +646,112 @@ mod tests {
         let path = expand_path("relative/dir");
         assert!(path.is_absolute(), "{path:?} should be absolute");
         assert!(path.ends_with("relative/dir"));
+    }
+}
+
+/// Index groups of matches that share the same replacement text.
+/// Forms have no static output and are ignored.
+pub fn duplicate_output_groups(entries: &[MatchEntry]) -> Vec<Vec<usize>> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.form.is_some() {
+            continue;
+        }
+        // `{{vars}}` render differently every time; not comparable as output.
+        if entry.replace.contains("{{") {
+            continue;
+        }
+        groups.entry(entry.replace.as_str()).or_default().push(index);
+    }
+    let mut out: Vec<Vec<usize>> = groups.into_values().filter(|group| group.len() > 1).collect();
+    out.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| entries[a[0]].replace.cmp(&entries[b[0]].replace))
+    });
+    out
+}
+
+/// Index groups of matches that share the same trigger (disambiguation groups).
+pub fn duplicate_trigger_groups(entries: &[MatchEntry]) -> Vec<Vec<usize>> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        groups.entry(entry.trigger.as_str()).or_default().push(index);
+    }
+    let mut out: Vec<Vec<usize>> = groups.into_values().filter(|group| group.len() > 1).collect();
+    out.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| entries[a[0]].trigger.cmp(&entries[b[0]].trigger))
+    });
+    out
+}
+
+/// Index groups that are truly redundant: same trigger *and* same output.
+pub fn exact_duplicate_groups(entries: &[MatchEntry]) -> Vec<Vec<usize>> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        groups
+            .entry((entry.trigger.as_str(), entry.replace.as_str()))
+            .or_default()
+            .push(index);
+    }
+    let mut out: Vec<Vec<usize>> = groups.into_values().filter(|group| group.len() > 1).collect();
+    out.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| entries[a[0]].trigger.cmp(&entries[b[0]].trigger))
+    });
+    out
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    use super::*;
+
+    fn entry(trigger: &str, replace: &str) -> MatchEntry {
+        MatchEntry {
+            trigger: trigger.into(),
+            replace: replace.into(),
+            word: false,
+            propagate_case: false,
+            force_clipboard: false,
+            source: "test".into(),
+            path: PathBuf::from("test.yml"),
+            vars: Vec::new(),
+            form: None,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn groups_identical_outputs_only() {
+        let entries = vec![
+            entry("a", "same"),
+            entry("b", "same"),
+            entry("c", "other"),
+            entry("d", "{{dynamic}}"),
+            entry("e", "{{dynamic}}"),
+        ];
+        let groups = duplicate_output_groups(&entries);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], vec![0, 1]);
+    }
+
+    #[test]
+    fn groups_shared_triggers_and_exact_pairs() {
+        let entries = vec![
+            entry("x", "one"),
+            entry("x", "two"),
+            entry("y", "two"),
+            entry("y", "two"),
+        ];
+        assert_eq!(duplicate_trigger_groups(&entries).len(), 2);
+        let exact = exact_duplicate_groups(&entries);
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0], vec![2, 3]);
     }
 }

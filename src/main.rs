@@ -31,6 +31,7 @@ fn main() -> Result<()> {
         "config" => run_config(&args),
         "setup-hyprland" => run_setup_hyprland(&args),
         "list" => run_list(&args),
+        "duplicates" => run_duplicates(&args),
         "search" => tui::run(flag_value(&args, "--target")),
         "form" => form::run(
             flag_value(&args, "--trigger"),
@@ -274,6 +275,76 @@ fn run_setup_hyprland(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn run_duplicates(args: &[String]) -> Result<()> {
+    let only_triggers = args.iter().any(|a| a == "--triggers");
+    let exact = args.iter().any(|a| a == "--exact");
+
+    let root = config::config_root();
+    let set = config::load(&root);
+    let entries = &set.entries;
+
+    let (title, groups) = if exact {
+        ("same trigger and same output", config::exact_duplicate_groups(entries))
+    } else if only_triggers {
+        ("same trigger", config::duplicate_trigger_groups(entries))
+    } else {
+        ("same output", config::duplicate_output_groups(entries))
+    };
+
+    if groups.is_empty() {
+        println!("no duplicates found ({title})");
+        return Ok(());
+    }
+    if !only_triggers && !exact {
+        let dynamic = entries
+            .iter()
+            .filter(|entry| entry.form.is_none() && entry.replace.contains("{{"))
+            .count();
+        if dynamic > 0 {
+            println!("({dynamic} match(es) with dynamic templates were ignored)\n");
+        }
+    }
+
+    let total: usize = groups.iter().map(Vec::len).sum();
+    println!(
+        "{} group(s), {} matches — {title}:\n",
+        groups.len(),
+        total
+    );
+
+    for group in &groups {
+        if exact || only_triggers {
+            println!("  trigger {:?}", entries[group[0]].trigger);
+            for &index in group {
+                let entry = &entries[index];
+                let preview = if entry.form.is_some() {
+                    "(form)".to_string()
+                } else {
+                    one_line(&entry.replace, 62)
+                };
+                println!("      {:<24} {:<14} {}", entry.trigger, entry.source, preview);
+            }
+        } else {
+            println!("  {:?}", one_line(&entries[group[0]].replace, 76));
+            for &index in group {
+                let entry = &entries[index];
+                println!("      {:<24} {}", entry.trigger, entry.source);
+            }
+        }
+        println!();
+    }
+    Ok(())
+}
+
+fn one_line(text: &str, limit: usize) -> String {
+    let flat = text.replace('\n', "⏎").replace('\t', " ");
+    let mut out: String = flat.chars().take(limit).collect();
+    if flat.chars().count() > limit {
+        out.push('…');
+    }
+    out
+}
+
 fn run_list(args: &[String]) -> Result<()> {
     let filter = args
         .iter()
@@ -396,6 +467,8 @@ COMMANDS:
                          Add the floating-window rule to your Hyprland config
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
+    duplicates [--triggers] [--exact]
+                         Find matches sharing an output, a trigger, or both
     search               Open the fuzzy search window (needs a terminal)
     form --trigger T     Fill a match's `form:` fields (used by the daemon)
     picker --trigger T [--var NAME]
