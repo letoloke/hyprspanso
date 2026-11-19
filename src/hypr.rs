@@ -140,9 +140,15 @@ pub fn spawn_listener(tx: Sender<Event>) {
             continue;
         };
         let Ok(stream) = UnixStream::connect(&path) else {
+            if debug() {
+                eprintln!("hyprspanso: cannot connect to {}", path.display());
+            }
             thread::sleep(std::time::Duration::from_secs(2));
             continue;
         };
+        if debug() {
+            eprintln!("hyprspanso: hypr socket2 {}", path.display());
+        }
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         loop {
@@ -152,9 +158,26 @@ pub fn spawn_listener(tx: Sender<Event>) {
                 Ok(_) => {}
             }
             let line = line.trim_end_matches(['\r', '\n']);
+            if debug() && line.starts_with("activelayout") {
+                eprintln!("hyprspanso: event {line}");
+            }
             if let Some(rest) = line.strip_prefix("activelayout>>") {
-                if let Some((_, layout)) = rest.split_once(',') {
-                    if tx.send(Event::Layout(layout.to_string())).is_err() {
+                if let Some((keyboard, layout)) = rest.split_once(',') {
+                    let layout = layout.trim();
+                    // Virtual keyboards (wtype, fcitx5) report "error"/"unknown"
+                    // and are not the layout the user is typing with.
+                    let is_virtual = keyboard.starts_with("hl-virtual-keyboard");
+                    let is_real_name = !layout.is_empty()
+                        && !layout.eq_ignore_ascii_case("error")
+                        && !layout.eq_ignore_ascii_case("unknown");
+                    if !is_virtual && is_real_name
+                        && tx
+                            .send(Event::Layout {
+                                keyboard: keyboard.to_string(),
+                                layout: layout.to_string(),
+                            })
+                            .is_err()
+                    {
                         return;
                     }
                 }
@@ -200,4 +223,55 @@ pub fn is_terminal(class: &str, title: &str) -> bool {
     ];
     let hay = format!("{class} {title}").to_lowercase();
     TERMS.iter().any(|t| hay.contains(t))
+}
+
+fn debug() -> bool {
+    std::env::var_os("HYPRSPANSO_DEBUG").is_some()
+}
+
+/// Hyprland and evdev spell the same keyboard differently
+/// ("2.4G Dongle Keyboard" vs "2.4g-dongle-keyboard"). Normalise both.
+pub fn normalize_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('-');
+        }
+    }
+    out
+}
+
+/// Active keymap of one keyboard, e.g. "Spanish (Latin American)".
+pub fn active_layout_for(device: &str) -> Option<String> {
+    let target = normalize_name(device);
+    let v = hypr_json("devices")?;
+    for keyboard in v.get("keyboards").and_then(Value::as_array)? {
+        let name = keyboard.get("name").and_then(Value::as_str)?;
+        if normalize_name(name) == target {
+            return keyboard
+                .get("active_keymap")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_keyboard_names() {
+        assert_eq!(
+            normalize_name("2.4G Dongle Keyboard"),
+            normalize_name("2.4g-dongle-keyboard")
+        );
+        assert_eq!(
+            normalize_name("AT Translated Set 2 keyboard"),
+            "at-translated-set-2-keyboard"
+        );
+    }
 }

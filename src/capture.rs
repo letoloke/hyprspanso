@@ -231,7 +231,11 @@ fn read_device(
             if !arbiter.accept(&group, &path) {
                 continue;
             }
-            let sent = tx.send(Event::Key { code, value });
+            let sent = tx.send(Event::Key {
+                code,
+                value,
+                device: name.clone(),
+            });
             if sent.is_err() {
                 return;
             }

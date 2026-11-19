@@ -86,28 +86,78 @@ impl Decoder {
     /// groups; if the name does not match, just move to the next group (which
     /// is correct for the usual two-layout setup).
     pub fn set_layout(&mut self, name: &str) {
-        if self.layouts.len() <= 1 {
+        let name = name.trim();
+        if name.is_empty()
+            || name.eq_ignore_ascii_case("error")
+            || name.eq_ignore_ascii_case("unknown")
+        {
             return;
         }
-        let needle = name.to_lowercase();
-        let matched = self.layouts.iter().position(|l| {
-            let l = l.to_lowercase();
-            l == needle || l.contains(&needle) || needle.contains(&l)
-        });
 
-        let index = match matched {
-            Some(i) => i as u32,
-            None => {
-                let current = self.state.serialize_layout(xkb::STATE_LAYOUT_LOCKED);
-                (current + 1) % self.layouts.len() as u32
+        if std::env::var_os("HYPRSPANSO_DEBUG").is_some() {
+            eprintln!(
+                "hyprspanso: set_layout {name:?} layouts={:?}",
+                self.layouts
+            );
+        }
+
+        if let Some(index) = self.find_layout(name) {
+            if std::env::var_os("HYPRSPANSO_DEBUG").is_some() {
+                eprintln!("hyprspanso: set_layout -> group {index}");
             }
-        };
+            self.apply_group(index);
+            return;
+        }
 
+        // The keymap may be stale if layouts were added at runtime
+        // (`hyprctl keyword input:kb_layout ...`). Re-read it once and retry.
+        if self.reload_keymap() {
+            if let Some(index) = self.find_layout(name) {
+                self.apply_group(index);
+                return;
+            }
+        }
+
+        // Unknown name: keep the current group instead of guessing. Guessing
+        // used to flip us<->latam on bogus events, decoding punctuation wrong.
+    }
+
+    fn find_layout(&self, name: &str) -> Option<u32> {
+        let needle = name.to_lowercase();
+        self.layouts.iter().position(|layout| {
+            let layout = layout.to_lowercase();
+            layout == needle || layout.contains(&needle) || needle.contains(&layout)
+        }).map(|index| index as u32)
+    }
+
+    fn apply_group(&mut self, index: u32) {
         let depressed = self.state.serialize_mods(xkb::STATE_MODS_DEPRESSED);
         let latched = self.state.serialize_mods(xkb::STATE_MODS_LATCHED);
         let locked = self.state.serialize_mods(xkb::STATE_MODS_LOCKED);
         self.state
             .update_mask(depressed, latched, locked, 0, 0, index);
+    }
+
+    fn reload_keymap(&mut self) -> bool {
+        let Some(text) = crate::hypr::dump_keymap() else {
+            return false;
+        };
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let Some(keymap) = xkb::Keymap::new_from_string(
+            &ctx,
+            text,
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        ) else {
+            return false;
+        };
+        self.layouts = (0..keymap.num_layouts())
+            .map(|index| keymap.layout_get_name(index).to_string())
+            .collect();
+        self.keymap = keymap;
+        self.state = xkb::State::new(&self.keymap);
+        self.modifier_since = None;
+        true
     }
 
     /// Throw the whole modifier/latch state away and start from the keymap.
@@ -179,4 +229,44 @@ impl Decoder {
 /// evdev keycodes for Shift/Ctrl/Alt/Meta on both sides.
 fn is_modifier(code: u16) -> bool {
     matches!(code, 29 | 97 | 42 | 54 | 56 | 100 | 125 | 126)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decoder_for_test() -> Decoder {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap =
+            xkb::Keymap::new_from_names(&ctx, "", "", "us,latam", "", None, 0).expect("keymap");
+        let layouts = (0..keymap.num_layouts())
+            .map(|index| keymap.layout_get_name(index).to_string())
+            .collect();
+        Decoder {
+            state: xkb::State::new(&keymap),
+            keymap,
+            layouts,
+            modifier_since: None,
+        }
+    }
+
+    #[test]
+    fn switching_layout_changes_the_group() {
+        let mut decoder = decoder_for_test();
+        assert_eq!(decoder.layouts.len(), 2);
+        decoder.set_layout(&decoder.layouts[1].clone());
+        assert_eq!(
+            decoder
+                .state
+                .serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            1
+        );
+        decoder.set_layout(&decoder.layouts[0].clone());
+        assert_eq!(
+            decoder
+                .state
+                .serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            0
+        );
+    }
 }

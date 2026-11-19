@@ -277,7 +277,9 @@ Common causes:
 |---|---|
 | nothing expands, bar says active | user not in `input` group, or the keyboard re-enumerated on an old build — restart the daemon (fixed in 0.2.1) |
 | nothing expands, wireless keyboard | some dongles expose two event nodes (`input0`/`input2`) and a re-pair can move the keys to the other one; 0.5.1+ reads every node and de-duplicates, older builds only read one — upgrade and restart |
+| trigger with `:` fails after a layout switch | fixed in 0.7.4: layout events from virtual keyboards (`error`) no longer flip the group, and only the keyboard you are typing on may change it |
 | modifier stuck (text turns uppercase) | `diag --keys` now shows the xkb masks (`d…/l…/k…`); 0.7.3 rebuilds the state on focus/device changes and after 60 s, which clears even latched/locked bits |
+| trigger with `:` fails after a layout switch | fixed in 0.7.4: layout events from virtual keyboards (`error`) no longer flip the group, and only the keyboard you are typing on may change it |
 | modifier stuck (text turns uppercase) | a second event node of the same keyboard was replaying presses after the real release; 0.7.1 reads one node per physical keyboard (echo nodes ignored, takeover after 2 s of silence) — upgrade and restart |
 | worked, then stopped silently | run `hyprspanso diag --keys` **before** restarting: `events` frozen means no keys reach the daemon; `events` growing with `held_mods` set means a lost key release; `buffer` staying at 0–1 with `last_decoded` incomplete means something is resetting the buffer (fixed in 0.5.3 for title changes) |
 | several snippets share a trigger | 0.7.0+ opens a picker (previously only the first match was used); type it and choose, or remove the duplicates |

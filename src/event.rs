@@ -1,7 +1,11 @@
 #[derive(Debug, Clone)]
 pub enum Event {
-    Key { code: u16, value: i32 },
-    Layout(String),
+    Key {
+        code: u16,
+        value: i32,
+        device: String,
+    },
+    Layout { keyboard: String, layout: String },
     /// Focus event. `address` comes from `activewindowv2` (empty when the
     /// compositor only sent `activewindow`); `class` from `activewindow`.
     Focus { address: String, class: String },

@@ -395,6 +395,7 @@ struct Engine {
     index: Index,
     decoder: Decoder,
     buffer: String,
+    last_device: Option<String>,
     last_focus: Option<String>,
     last_focus_class: String,
     mods: Mods,
@@ -473,6 +474,7 @@ impl Engine {
             index,
             decoder,
             buffer: String::new(),
+            last_device: None,
             last_focus: None,
             last_focus_class: String::new(),
             mods: Mods::default(),
@@ -483,11 +485,29 @@ impl Engine {
 
     fn handle(&mut self, event: Event) {
         match event {
-            Event::Key { code, value } => self.on_key(code, value),
-            Event::Layout(layout) => {
-                self.decoder.set_layout(&layout);
-                self.buffer.clear();
-                self.mods.reset();
+            Event::Key {
+                code,
+                value,
+                device,
+            } => self.on_key(code, value, &device),
+            Event::Layout { keyboard, layout } => {
+                // Only the keyboard we are actually typing on may change the
+                // decoding layout. Other keyboards (a controller, a phantom
+                // uinput node, a second device on a different layout) must not
+                // flip the group under our fingers.
+                let relevant = self
+                    .last_device
+                    .as_ref()
+                    .map(|device| {
+                        crate::hypr::normalize_name(device)
+                            == crate::hypr::normalize_name(&keyboard)
+                    })
+                    .unwrap_or(true);
+                if relevant {
+                    self.decoder.set_layout(&layout);
+                    self.buffer.clear();
+                    self.mods.reset();
+                }
             }
             Event::Focus { address, class } => {
                 let changed = if !address.is_empty() {
@@ -613,7 +633,17 @@ impl Engine {
         });
     }
 
-    fn on_key(&mut self, code: u16, value: i32) {
+    fn on_key(&mut self, code: u16, value: i32, device: &str) {
+        if self.last_device.as_deref() != Some(device) {
+            self.last_device = Some(device.to_string());
+            self.buffer.clear();
+            self.mods.reset();
+            // Hyprland keeps a layout per keyboard; ask for this one's.
+            if let Some(layout) = crate::hypr::active_layout_for(device) {
+                self.decoder.set_layout(&layout);
+            }
+        }
+
         self.shared.diag.events.fetch_add(1, Ordering::Relaxed);
         self.shared
             .diag
