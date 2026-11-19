@@ -50,6 +50,7 @@ plain text, which is exactly what `hyprspanso export` produces:
 
 ```bash
 hyprspanso export --output leantype.txt        # default format
+hyprspanso export --forms clipboard --output leantype.txt
 hyprspanso export --format tsv   --output snippets.tsv
 hyprspanso export --format json  --output snippets.json
 ```
@@ -60,8 +61,21 @@ text"**, paste the file's content, apply.
 What converts: `trigger`/`replace`, multi-line and unicode text, and
 `{{date}}` variables (`%Y-%m-%d` becomes `%date:yyyy-MM-dd%`).
 
-What is dropped, with a summary on stderr: `form:` matches, `choice`/`random`/
-`echo` variables, and duplicate triggers (first wins). Obsolete matches
+Forms have no prompt on a phone keyboard, so their template is exported with
+the fields handled by `--forms`:
+
+| `--forms` | Result |
+|---|---|
+| `placeholder` (default) | `Hola [[name]]!` — replace it by hand after inserting |
+| `clipboard` | `Hola %clipboard%!` — copy the value (e.g. the guest's name), then type the trigger |
+| `empty` | `Hola !` — the field is removed |
+
+Choice fields use their first value. `%clipboard%` is the closest thing to a
+form on Android: copy the name to the clipboard, type `ingresoan1`, and the
+message goes out with that name in place.
+
+What is dropped, with a summary on stderr: `choice`/`random`/`echo` variables
+and duplicate triggers (first wins). Obsolete matches
 (`href`, scripts) never leave the machine. Triggers containing whitespace have
 it **removed** (`my trigger` → `mytrigger`, `ytd ` → `ytd`), because phone
 keyboards reject spaces in shortcut names; the report counts how many were

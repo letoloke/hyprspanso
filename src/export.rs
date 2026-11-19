@@ -11,7 +11,7 @@
 //! %date:yyyy-MM-dd%
 //! ```
 
-use crate::config::{self, MatchEntry, VarKind};
+use crate::config::{self, FormFieldKind, MatchEntry, VarKind};
 use anyhow::{bail, Result};
 use std::collections::HashSet;
 use std::fs;
@@ -20,14 +20,20 @@ use std::path::PathBuf;
 pub fn run(args: &[String]) -> Result<()> {
     let format = flag(args, "--format").unwrap_or_else(|| "leantype".into());
     let output = flag(args, "--output").map(PathBuf::from);
+    let forms = match flag(args, "--forms").unwrap_or_else(|| "placeholder".into()).as_str() {
+        "placeholder" => FormMode::Placeholder,
+        "clipboard" => FormMode::Clipboard,
+        "empty" => FormMode::Empty,
+        other => bail!("unknown --forms {other:?} (placeholder, clipboard, empty)"),
+    };
 
     let root = config::config_root();
     let set = config::load(&root);
 
     let (text, report) = match format.as_str() {
-        "leantype" | "lean" => leantype(&set.entries),
-        "tsv" | "tab" => tsv(&set.entries),
-        "json" => json(&set.entries),
+        "leantype" | "lean" => leantype(&set.entries, forms),
+        "tsv" | "tab" => tsv(&set.entries, forms),
+        "json" => json(&set.entries, forms),
         other => bail!("unknown --format {other:?} (leantype, tsv, json)"),
     };
 
@@ -54,6 +60,17 @@ pub fn run(args: &[String]) -> Result<()> {
             report.trimmed
         );
     }
+    if report.forms > 0 {
+        eprintln!(
+            "  {:4}  form template(s) exported {}",
+            report.forms,
+            match forms {
+                FormMode::Placeholder => "(fill the [[placeholders]] after inserting)",
+                FormMode::Clipboard => "(placeholders became %clipboard%: copy the value, then expand)",
+                FormMode::Empty => "(placeholders removed)",
+            }
+        );
+    }
     Ok(())
 }
 
@@ -64,10 +81,21 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormMode {
+    /// Keep `[[name]]` visible so it can be replaced by hand.
+    Placeholder,
+    /// Replace each field with LeanType's `%clipboard%`.
+    Clipboard,
+    /// Drop the placeholders.
+    Empty,
+}
+
 #[derive(Default)]
 struct Report {
     exported: usize,
     trimmed: usize,
+    forms: usize,
     skipped: Vec<(&'static str, String)>,
 }
 
@@ -104,7 +132,7 @@ fn clean_trigger(trigger: &str, report: &mut Report) -> Option<String> {
     Some(cleaned)
 }
 
-fn leantype(entries: &[MatchEntry]) -> (String, Report) {
+fn leantype(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
     let mut report = Report::default();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = String::new();
@@ -117,7 +145,7 @@ fn leantype(entries: &[MatchEntry]) -> (String, Report) {
             report.skip("duplicate trigger (kept the first)", &trigger);
             continue;
         }
-        let text = match leantype_body(entry) {
+        let text = match body(entry, forms) {
             Ok(text) => text,
             Err(reason) => {
                 report.skip(reason, &trigger);
@@ -130,16 +158,37 @@ fn leantype(entries: &[MatchEntry]) -> (String, Report) {
         }
         out.push_str(&format!("=== {trigger} ===\n{text}\n\n"));
         report.exported += 1;
+        if entry.form.is_some() {
+            report.forms += 1;
+        }
     }
 
     (out, report)
 }
 
 /// Replacement text with espanso variables translated to LeanType's `%date%`.
-fn leantype_body(entry: &MatchEntry) -> Result<String, &'static str> {
-    if entry.form.is_some() {
-        return Err("form match");
+/// Replacement text for one match: variables translated, forms turned into a
+/// template with their fields handled according to `forms`.
+fn body(entry: &MatchEntry, forms: FormMode) -> Result<String, &'static str> {
+    if let Some(form) = &entry.form {
+        let mut out = form.template.clone();
+        for field in &form.fields {
+            let value = match &field.kind {
+                // A choice has no prompt on the phone; use its first value.
+                FormFieldKind::Choice { values, .. } => {
+                    values.first().cloned().unwrap_or_default()
+                }
+                _ => match forms {
+                    FormMode::Placeholder => format!("[[{}]]", field.name),
+                    FormMode::Clipboard => "%clipboard%".to_string(),
+                    FormMode::Empty => String::new(),
+                },
+            };
+            out = out.replace(&format!("[[{}]]", field.name), &value);
+        }
+        return Ok(out);
     }
+
     let mut out = entry.replace.clone();
     for var in &entry.vars {
         let value = match &var.kind {
@@ -204,7 +253,7 @@ fn strftime_to_java(format: &str) -> Option<String> {
     Some(out)
 }
 
-fn tsv(entries: &[MatchEntry]) -> (String, Report) {
+fn tsv(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
     let mut report = Report::default();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = String::new();
@@ -216,28 +265,31 @@ fn tsv(entries: &[MatchEntry]) -> (String, Report) {
             report.skip("duplicate trigger (kept the first)", &trigger);
             continue;
         }
-        let body = match leantype_body(entry) {
+        let body = match body(entry, forms) {
             Ok(body) => body,
             Err(reason) => {
-                report.skip(reason, &entry.trigger);
+                report.skip(reason, &trigger);
                 continue;
             }
         };
         let flat = body.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n");
         out.push_str(&format!("{trigger}\t{flat}\n"));
         report.exported += 1;
+        if entry.form.is_some() {
+            report.forms += 1;
+        }
     }
     (out, report)
 }
 
-fn json(entries: &[MatchEntry]) -> (String, Report) {
+fn json(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
     let mut report = Report::default();
     let mut items = Vec::new();
     for entry in entries {
         let Some(trigger) = clean_trigger(&entry.trigger, &mut report) else {
             continue;
         };
-        let body = match leantype_body(entry) {
+        let body = match body(entry, forms) {
             Ok(body) => body,
             Err(reason) => {
                 report.skip(reason, &trigger);
@@ -251,6 +303,9 @@ fn json(entries: &[MatchEntry]) -> (String, Report) {
             "propagate_case": entry.propagate_case,
         }));
         report.exported += 1;
+        if entry.form.is_some() {
+            report.forms += 1;
+        }
     }
     let text = serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into());
     (text + "\n", report)
@@ -284,6 +339,30 @@ mod tests {
     }
 
     #[test]
+    fn exports_forms_as_templates() {
+        use crate::config::{FormField, FormSpec};
+
+        let mut form = entry("inforecepcion", "");
+        form.form = Some(FormSpec {
+            template: "Hola [[name]]! Bienvenido".into(),
+            fields: vec![FormField {
+                name: "name".into(),
+                kind: FormFieldKind::Text,
+            }],
+        });
+
+        let (placeholder, report) = leantype(&[form.clone()], FormMode::Placeholder);
+        assert!(placeholder.contains("Hola [[name]]! Bienvenido"));
+        assert_eq!(report.forms, 1);
+
+        let (clipboard, _) = leantype(&[form.clone()], FormMode::Clipboard);
+        assert!(clipboard.contains("Hola %clipboard%! Bienvenido"));
+
+        let (empty, _) = leantype(&[form], FormMode::Empty);
+        assert!(empty.contains("Hola ! Bienvenido"));
+    }
+
+    #[test]
     fn exports_leantype_blocks_and_skips_unsupported() {
         let mut dynamic = entry(":date", "{{d}}");
         dynamic.vars = vec![crate::config::Var {
@@ -299,7 +378,7 @@ mod tests {
             entry("trailing ", "trimmed"),
             dynamic,
         ];
-        let (text, report) = leantype(&entries);
+        let (text, report) = leantype(&entries, FormMode::Placeholder);
         assert!(text.contains("=== :rm ===\nRicardo\n"));
         assert!(text.contains("=== :date ===\n%date:yyyy-MM-dd%\n"));
         assert!(text.contains("=== withspace ===\ncollapsed\n"));
