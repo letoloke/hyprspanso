@@ -42,6 +42,29 @@ binding, the Omarchy bar widget and troubleshooting.
 | duplicate triggers  | ✅ disambiguation picker |
 | `vars: shell`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
 
+### Export to a phone keyboard
+
+Phones have no `/dev/input`, so hyprspanso itself cannot run there — but the
+snippets can. LeanType (F-Droid, GPL-3.0) has a text expander that is edited as
+plain text, which is exactly what `hyprspanso export` produces:
+
+```bash
+hyprspanso export --output leantype.txt        # default format
+hyprspanso export --format tsv   --output snippets.tsv
+hyprspanso export --format json  --output snippets.json
+```
+
+Then on the phone: **LeanType → Settings → Text expander → "all shortcuts as
+text"**, paste the file's content, apply.
+
+What converts: `trigger`/`replace`, multi-line and unicode text, and
+`{{date}}` variables (`%Y-%m-%d` becomes `%date:yyyy-MM-dd%`).
+
+What is dropped, with a summary on stderr: `form:` matches, `choice`/`random`/
+`echo` variables, triggers with **internal** spaces (LeanType forbids spaces in
+names — trailing spaces are trimmed instead), and duplicate triggers (first
+wins). Obsolete matches (`href`, scripts) never leave the machine.
+
 ### Finding duplicates
 
 ```bash
@@ -222,6 +245,8 @@ hyprspanso config            show where matches are read from
 hyprspanso config set DIR    point at another folder, saved for next start
 hyprspanso check             validate match files, list skipped matches
 hyprspanso list [filter]     print triggers
+hyprspanso export [--format leantype|tsv|json] [--output FILE]
+                             Export snippets for a phone keyboard
 hyprspanso duplicates        find matches sharing an output text
 hyprspanso duplicates --triggers   find matches sharing a trigger
 hyprspanso duplicates --exact      same trigger *and* same output

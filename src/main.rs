@@ -7,6 +7,7 @@ mod hypr;
 mod inject;
 mod keymap;
 mod matcher;
+mod export;
 mod picker;
 mod tui;
 
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
         "setup-hyprland" => run_setup_hyprland(&args),
         "list" => run_list(&args),
         "duplicates" => run_duplicates(&args),
+        "export" => export::run(&args),
         "search" => tui::run(flag_value(&args, "--target")),
         "form" => form::run(
             flag_value(&args, "--trigger"),
@@ -467,6 +469,8 @@ COMMANDS:
                          Add the floating-window rule to your Hyprland config
     check                Validate the espanso match files and print a summary
     list [filter]        Print loaded triggers/replacements
+    export [--format leantype|tsv|json] [--output FILE]
+                         Export snippets for a phone keyboard
     duplicates [--triggers] [--exact]
                          Find matches sharing an output, a trigger, or both
     search               Open the fuzzy search window (needs a terminal)
