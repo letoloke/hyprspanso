@@ -491,20 +491,15 @@ impl Engine {
                 device,
             } => self.on_key(code, value, &device),
             Event::Layout { keyboard, layout } => {
-                // Only the keyboard we are actually typing on may change the
-                // decoding layout. Other keyboards (a controller, a phantom
-                // uinput node, a second device on a different layout) must not
-                // flip the group under our fingers.
-                let relevant = self
-                    .last_device
-                    .as_ref()
-                    .map(|device| {
-                        crate::hypr::normalize_name(device)
-                            == crate::hypr::normalize_name(&keyboard)
-                    })
-                    .unwrap_or(true);
-                if relevant {
-                    self.decoder.set_layout(&layout);
+                // Remember the layout for that keyboard. It only changes the
+                // decoding group if we are currently typing on it; each
+                // keyboard keeps its own layout in the decoder.
+                let applied = self.decoder.note_layout(
+                    &keyboard,
+                    &layout,
+                    self.last_device.as_deref(),
+                );
+                if applied {
                     self.buffer.clear();
                     self.mods.reset();
                 }
@@ -634,14 +629,11 @@ impl Engine {
     }
 
     fn on_key(&mut self, code: u16, value: i32, device: &str) {
+        self.decoder.prepare_device(device);
         if self.last_device.as_deref() != Some(device) {
             self.last_device = Some(device.to_string());
             self.buffer.clear();
             self.mods.reset();
-            // Hyprland keeps a layout per keyboard; ask for this one's.
-            if let Some(layout) = crate::hypr::active_layout_for(device) {
-                self.decoder.set_layout(&layout);
-            }
         }
 
         self.shared.diag.events.fetch_add(1, Ordering::Relaxed);

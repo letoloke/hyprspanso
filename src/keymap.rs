@@ -1,6 +1,7 @@
 //! keycode -> text, using the compositor's own keymap.
 
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use xkbcommon::xkb;
 
@@ -11,6 +12,10 @@ pub struct Decoder {
     /// When the currently held modifier was pressed; used to recover from a
     /// release that never arrived.
     modifier_since: Option<Instant>,
+    /// Layout group per keyboard (`normalized name -> group`). Hyprland keeps
+    /// a layout per keyboard, so two keyboards may be on different layouts at
+    /// the same time; decoding has to follow the keyboard that typed the key.
+    groups: HashMap<String, (u32, Instant)>,
 }
 
 impl Decoder {
@@ -52,6 +57,7 @@ impl Decoder {
             state,
             layouts,
             modifier_since: None,
+            groups: HashMap::new(),
         })
     }
 
@@ -85,41 +91,75 @@ impl Decoder {
     /// Hyprland emits `activelayout>>kbd,<name>`. Match it against the keymap
     /// groups; if the name does not match, just move to the next group (which
     /// is correct for the usual two-layout setup).
-    pub fn set_layout(&mut self, name: &str) {
-        let name = name.trim();
-        if name.is_empty()
-            || name.eq_ignore_ascii_case("error")
-            || name.eq_ignore_ascii_case("unknown")
-        {
-            return;
-        }
+    /// Remember a keyboard's layout (from `activelayout`). Returns whether it
+    /// was applied to the state we are currently decoding with.
+    pub fn note_layout(&mut self, keyboard: &str, layout: &str, current: Option<&str>) -> bool {
+        let Some(index) = self.resolve_group(layout) else {
+            return false;
+        };
+        let key = crate::hypr::normalize_name(keyboard);
+        self.groups.insert(key.clone(), (index, Instant::now()));
 
-        if std::env::var_os("HYPRSPANSO_DEBUG").is_some() {
-            eprintln!(
-                "hyprspanso: set_layout {name:?} layouts={:?}",
-                self.layouts
-            );
-        }
-
-        if let Some(index) = self.find_layout(name) {
-            if std::env::var_os("HYPRSPANSO_DEBUG").is_some() {
-                eprintln!("hyprspanso: set_layout -> group {index}");
-            }
-            self.apply_group(index);
-            return;
-        }
-
-        // The keymap may be stale if layouts were added at runtime
-        // (`hyprctl keyword input:kb_layout ...`). Re-read it once and retry.
-        if self.reload_keymap() {
-            if let Some(index) = self.find_layout(name) {
+        let relevant = current
+            .map(|device| crate::hypr::normalize_name(device) == key)
+            .unwrap_or(true);
+        if relevant {
+            let current_group = self.state.serialize_layout(xkb::STATE_LAYOUT_LOCKED);
+            if current_group != index {
                 self.apply_group(index);
-                return;
             }
         }
+        relevant
+    }
 
-        // Unknown name: keep the current group instead of guessing. Guessing
-        // used to flip us<->latam on bogus events, decoding punctuation wrong.
+    /// Called for every key: switches the decoding group to the layout of the
+    /// keyboard that produced it. After the first key of a keyboard the group
+    /// comes from the cache, so alternating keyboards stays cheap.
+    pub fn prepare_device(&mut self, device: &str) {
+        let key = crate::hypr::normalize_name(device);
+        const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+        let cached = self
+            .groups
+            .get(&key)
+            .filter(|(_, seen)| seen.elapsed() < CACHE_TTL)
+            .map(|(index, _)| *index);
+
+        let index = if let Some(index) = cached {
+            Some(index)
+        } else if let Some(layout) = crate::hypr::active_layout_for(device) {
+            let index = self.resolve_group(&layout);
+            if let Some(index) = index {
+                self.groups.insert(key, (index, Instant::now()));
+            }
+            index
+        } else {
+            // Keep the last known group if hyprctl is unavailable.
+            self.groups.get(&key).map(|(index, _)| *index)
+        };
+
+        if let Some(index) = index {
+            if self.state.serialize_layout(xkb::STATE_LAYOUT_LOCKED) != index {
+                self.apply_group(index);
+            }
+        }
+    }
+
+    fn resolve_group(&mut self, layout: &str) -> Option<u32> {
+        if layout.trim().is_empty()
+            || layout.eq_ignore_ascii_case("error")
+            || layout.eq_ignore_ascii_case("unknown")
+        {
+            return None;
+        }
+        if let Some(index) = self.find_layout(layout) {
+            return Some(index);
+        }
+        // Stale keymap after a runtime layout change: re-read it once.
+        if self.reload_keymap() {
+            return self.find_layout(layout);
+        }
+        None
     }
 
     fn find_layout(&self, name: &str) -> Option<u32> {
@@ -247,21 +287,51 @@ mod tests {
             keymap,
             layouts,
             modifier_since: None,
+            groups: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn layouts_are_tracked_per_keyboard() {
+        let mut decoder = decoder_for_test();
+        let latam = decoder.layouts[1].clone();
+        let us = decoder.layouts[0].clone();
+
+        // two keyboards on different layouts
+        decoder.note_layout("kbd-a", &latam, Some("kbd-a"));
+        decoder.note_layout("kbd-b", &us, Some("kbd-b"));
+
+        decoder.prepare_device("kbd-a");
+        assert_eq!(
+            decoder.state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            1
+        );
+        decoder.prepare_device("kbd-b");
+        assert_eq!(
+            decoder.state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            0
+        );
+        decoder.prepare_device("kbd-a");
+        assert_eq!(
+            decoder.state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            1
+        );
     }
 
     #[test]
     fn switching_layout_changes_the_group() {
         let mut decoder = decoder_for_test();
         assert_eq!(decoder.layouts.len(), 2);
-        decoder.set_layout(&decoder.layouts[1].clone());
+        let latam = decoder.layouts[1].clone();
+        decoder.note_layout("test", &latam, Some("test"));
         assert_eq!(
             decoder
                 .state
                 .serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
             1
         );
-        decoder.set_layout(&decoder.layouts[0].clone());
+        let us = decoder.layouts[0].clone();
+        decoder.note_layout("test", &us, Some("test"));
         assert_eq!(
             decoder
                 .state
