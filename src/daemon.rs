@@ -236,6 +236,20 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
             target = Some(rest.to_string());
         } else if let Some(rest) = line.strip_prefix("SELECT\t") {
             selection = Some(parse_choice(rest));
+        } else if let Some(rest) = line.strip_prefix("PICKVAR\t") {
+            let mut parts = rest.split('\t');
+            let trigger = parts.next().unwrap_or_default().to_string();
+            let var = parts.next().unwrap_or_default().to_string();
+            let index = parts
+                .next()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let _ = tx.send(Event::PickVar {
+                trigger,
+                var,
+                index,
+                target: target.clone(),
+            });
         } else if let Some(rest) = line.strip_prefix("PICK\t") {
             selection = Some(parse_choice(rest));
         } else if let Some(rest) = line.strip_prefix("FORM\t") {
@@ -389,11 +403,19 @@ fn ensure_wayland_env() {
     }
 }
 
+struct ChoiceFlow {
+    chosen: HashMap<String, String>,
+    target: String,
+}
+
 struct Engine {
     root: PathBuf,
     entries: Vec<MatchEntry>,
     index: Index,
     decoder: Decoder,
+    /// In-flight `choice` picks per trigger (a form-like flow can span
+    /// several picker windows when a match has more than one choice var).
+    choice_flows: HashMap<String, ChoiceFlow>,
     buffer: String,
     last_device: Option<String>,
     last_focus: Option<String>,
@@ -473,6 +495,7 @@ impl Engine {
             entries,
             index,
             decoder,
+            choice_flows: HashMap::new(),
             buffer: String::new(),
             last_device: None,
             last_focus: None,
@@ -533,6 +556,12 @@ impl Engine {
                 index,
                 target,
             } => self.choose(&trigger, index, target.as_deref()),
+            Event::PickVar {
+                trigger,
+                var,
+                index,
+                target,
+            } => self.pick_var(&trigger, &var, index, target.as_deref()),
             Event::FormValues {
                 trigger,
                 values,
@@ -565,6 +594,27 @@ impl Engine {
             eprintln!("hyprspanso: selected trigger no longer exists: {trigger}");
             return;
         };
+        if let Some(var) = matcher::pending_choice(entry, &HashMap::new()) {
+            let var_name = var.name.clone();
+            let trigger = entry.trigger.clone();
+            let address = target
+                .filter(|address| !address.is_empty())
+                .map(str::to_string)
+                .or_else(|| crate::hypr::active_window().map(|(_, _, a)| a))
+                .unwrap_or_default();
+            self.choice_flows.insert(
+                trigger.clone(),
+                ChoiceFlow {
+                    chosen: HashMap::new(),
+                    target: address.clone(),
+                },
+            );
+            if let Err(err) = launch_picker(&trigger, Some(&var_name), &address) {
+                eprintln!("hyprspanso: cannot open choice window: {err:#}");
+            }
+            return;
+        }
+
         if entry.form.is_some() {
             let address = target
                 .filter(|address| !address.is_empty())
@@ -619,6 +669,61 @@ impl Engine {
             thread::sleep(Duration::from_millis(120));
         } else {
             thread::sleep(Duration::from_millis(250));
+        }
+
+        self.queue(Job {
+            text,
+            backspaces: 0,
+            clipboard,
+        });
+    }
+
+    fn pick_var(&mut self, trigger: &str, var: &str, index: usize, target: Option<&str>) {
+        let Some(entry) = self.entries.iter().find(|entry| entry.trigger == trigger) else {
+            eprintln!("hyprspanso: choice trigger no longer exists: {trigger}");
+            return;
+        };
+        let values = matcher::choice_values(entry, var);
+        let Some(value) = values.get(index).cloned() else {
+            eprintln!("hyprspanso: choice value {index} out of range for {var}");
+            return;
+        };
+
+        let flow = self
+            .choice_flows
+            .entry(trigger.to_string())
+            .or_insert_with(|| ChoiceFlow {
+                chosen: HashMap::new(),
+                target: target.map(str::to_string).unwrap_or_default(),
+            });
+        if flow.target.is_empty() {
+            if let Some(target) = target {
+                flow.target = target.to_string();
+            }
+        }
+        flow.chosen.insert(var.to_string(), value);
+
+        if let Some(next) = matcher::pending_choice(entry, &flow.chosen) {
+            let next_name = next.name.clone();
+            let target = flow.target.clone();
+            if let Err(err) = launch_picker(trigger, Some(&next_name), &target) {
+                eprintln!("hyprspanso: cannot open choice window: {err:#}");
+            }
+            return;
+        }
+
+        let Some(flow) = self.choice_flows.remove(trigger) else {
+            return;
+        };
+        let text = matcher::render_with(entry, chrono::Local::now(), &flow.chosen);
+        let clipboard = entry.force_clipboard || text.chars().count() > 120;
+        self.shared.diag.matches.fetch_add(1, Ordering::Relaxed);
+
+        if flow.target.is_empty() {
+            thread::sleep(Duration::from_millis(250));
+        } else {
+            crate::hypr::focus_window(&flow.target);
+            thread::sleep(Duration::from_millis(120));
         }
 
         self.queue(Job {
@@ -729,6 +834,32 @@ impl Engine {
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
+        if let Some(var) = matcher::pending_choice(hit.entry, &HashMap::new()) {
+            let var_name = var.name.clone();
+            let backspaces = hit.backspaces;
+            let trigger = hit.entry.trigger.clone();
+            let target = crate::hypr::active_window()
+                .map(|(_, _, address)| address)
+                .unwrap_or_default();
+            self.buffer.clear();
+            self.queue(Job {
+                text: String::new(),
+                backspaces,
+                clipboard: false,
+            });
+            self.choice_flows.insert(
+                trigger.clone(),
+                ChoiceFlow {
+                    chosen: HashMap::new(),
+                    target: target.clone(),
+                },
+            );
+            if let Err(err) = launch_picker(&trigger, Some(&var_name), &target) {
+                eprintln!("hyprspanso: cannot open choice window: {err:#}");
+            }
+            return;
+        }
+
         {
             let group = self.entries_for(&hit.entry.trigger);
             if group.len() > 1 {
@@ -743,7 +874,7 @@ impl Engine {
                     backspaces,
                     clipboard: false,
                 });
-                if let Err(err) = launch_picker(&trigger, &target) {
+                if let Err(err) = launch_picker(&trigger, None, &target) {
                     eprintln!("hyprspanso: cannot open picker window: {err:#}");
                 }
                 return;
@@ -844,9 +975,13 @@ fn which(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn launch_picker(trigger: &str, target: &str) -> anyhow::Result<()> {
+fn launch_picker(trigger: &str, var: Option<&str>, target: &str) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?.to_string_lossy().to_string();
     let mut args: Vec<String> = vec![exe, "picker".into(), "--trigger".into(), trigger.into()];
+    if let Some(var) = var {
+        args.push("--var".into());
+        args.push(var.into());
+    }
     if !target.is_empty() {
         args.push("--target".into());
         args.push(target.into());

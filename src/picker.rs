@@ -16,20 +16,33 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-pub fn run(trigger: Option<String>, target: Option<String>) -> Result<()> {
+pub fn run(trigger: Option<String>, var: Option<String>, target: Option<String>) -> Result<()> {
     let trigger = trigger.context("missing --trigger")?;
     let root = config::config_root();
     let set = config::load(&root);
 
-    let group: Vec<MatchEntry> = set
-        .entries
-        .iter()
-        .filter(|entry| entry.trigger == trigger)
-        .cloned()
-        .collect();
-    if group.len() < 2 {
-        anyhow::bail!("trigger {trigger:?} has no alternatives");
-    }
+    // A `--var` picker lists the values of one `type: choice` variable;
+    // otherwise it disambiguates several matches that share the trigger.
+    let (group, values) = if let Some(var) = &var {
+        let entry = set
+            .entries
+            .iter()
+            .find(|entry| entry.trigger == trigger && !matcher::choice_values(entry, var).is_empty())
+            .with_context(|| format!("no `choice` variable {var:?} for {trigger:?}"))?;
+        let values = matcher::choice_values(entry, var);
+        (vec![entry.clone()], values)
+    } else {
+        let group: Vec<MatchEntry> = set
+            .entries
+            .iter()
+            .filter(|entry| entry.trigger == trigger)
+            .cloned()
+            .collect();
+        if group.len() < 2 {
+            anyhow::bail!("trigger {trigger:?} has no alternatives");
+        }
+        (group, Vec::new())
+    };
 
     let sock = crate::daemon::socket_path();
     let mut stream = UnixStream::connect(&sock).ok();
@@ -39,8 +52,10 @@ pub fn run(trigger: Option<String>, target: Option<String>) -> Result<()> {
 
     let mut app = PickerApp {
         trigger,
+        var,
         target,
         group,
+        values,
         selected: 0,
         list_state: ListState::default().with_selected(Some(0)),
         status: if stream.is_some() {
@@ -59,8 +74,10 @@ pub fn run(trigger: Option<String>, target: Option<String>) -> Result<()> {
 
 struct PickerApp {
     trigger: String,
+    var: Option<String>,
     target: Option<String>,
     group: Vec<MatchEntry>,
+    values: Vec<String>,
     selected: usize,
     list_state: ListState,
     status: String,
@@ -97,7 +114,7 @@ impl PickerApp {
                 KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
                 KeyCode::Char(c @ '1'..='9') => {
                     let index = c as usize - '1' as usize;
-                    if index < self.group.len() {
+                    if index < self.len() {
                         self.selected = index;
                         self.list_state.select(Some(index));
                         if self.submit().is_ok() {
@@ -110,8 +127,16 @@ impl PickerApp {
         }
     }
 
+    fn len(&self) -> usize {
+        if self.var.is_some() {
+            self.values.len()
+        } else {
+            self.group.len()
+        }
+    }
+
     fn move_by(&mut self, delta: i32) {
-        let len = self.group.len() as i32;
+        let len = self.len() as i32;
         self.selected = (self.selected as i32 + delta).rem_euclid(len) as usize;
         self.list_state.select(Some(self.selected));
     }
@@ -130,7 +155,10 @@ impl PickerApp {
         if let Some(target) = &self.target {
             writeln!(stream, "TARGET\t{target}")?;
         }
-        writeln!(stream, "PICK\t{}\t{index}", self.trigger)?;
+        match &self.var {
+            Some(var) => writeln!(stream, "PICKVAR\t{}\t{var}\t{index}", self.trigger)?,
+            None => writeln!(stream, "PICK\t{}\t{index}", self.trigger)?,
+        }
         stream.flush()?;
         Ok(())
     }
@@ -171,7 +199,10 @@ impl PickerApp {
             ),
             Span::raw(self.trigger.clone()),
             Span::styled(
-                format!("   {} matches", self.group.len()),
+                match &self.var {
+                    Some(var) => format!("   {var}"),
+                    None => format!("   {} matches", self.group.len()),
+                },
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
@@ -181,20 +212,35 @@ impl PickerApp {
         let columns = Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)])
             .split(areas[1]);
 
-        let items: Vec<ListItem> = self
-            .group
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{} ", index + 1),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::raw(Self::describe(entry)),
-                ]))
-            })
-            .collect();
+        let items: Vec<ListItem> = if self.var.is_some() {
+            self.values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!("{} ", index + 1),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::raw(value.clone()),
+                    ]))
+                })
+                .collect()
+        } else {
+            self.group
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!("{} ", index + 1),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::raw(Self::describe(entry)),
+                    ]))
+                })
+                .collect()
+        };
 
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title(" choices "))
@@ -206,14 +252,21 @@ impl PickerApp {
             .highlight_symbol("▸ ");
         frame.render_stateful_widget(list, columns[0], &mut self.list_state);
 
-        let preview = self
-            .group
-            .get(self.selected)
-            .map(|entry| match &entry.form {
-                Some(form) => form.template.clone(),
-                None => matcher::render(entry),
-            })
-            .unwrap_or_default();
+        let preview = if let (Some(var), Some(entry)) = (&self.var, self.group.first()) {
+            let mut chosen = std::collections::HashMap::new();
+            if let Some(value) = self.values.get(self.selected) {
+                chosen.insert(var.clone(), value.clone());
+            }
+            matcher::render_with(entry, chrono::Local::now(), &chosen)
+        } else {
+            self.group
+                .get(self.selected)
+                .map(|entry| match &entry.form {
+                    Some(form) => form.template.clone(),
+                    None => matcher::render(entry),
+                })
+                .unwrap_or_default()
+        };
         let lines: Vec<Line> = preview
             .split('\n')
             .map(|line| Line::from(line.to_string()))

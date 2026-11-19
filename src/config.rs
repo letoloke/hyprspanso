@@ -64,6 +64,10 @@ pub enum VarKind {
     Date { format: String, offset: i64 },
     /// `type: echo` — literal text.
     Echo { echo: String },
+    /// `type: choice` — the user picks one of `values` in a window.
+    Choice { values: Vec<String> },
+    /// `type: random` — one of `values` is picked automatically.
+    Random { values: Vec<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -541,6 +545,27 @@ fn parse_vars(map: &serde_yaml::Mapping) -> Result<Vec<Var>, String> {
             "echo" => VarKind::Echo {
                 echo: params.get("echo").and_then(scalar).unwrap_or_default(),
             },
+            "choice" | "random" => {
+                let key = if params.contains_key("values") {
+                    "values"
+                } else {
+                    "choices"
+                };
+                let values = match params.get(key) {
+                    Some(Value::Sequence(items)) => {
+                        items.iter().filter_map(scalar).collect::<Vec<_>>()
+                    }
+                    _ => Vec::new(),
+                };
+                if values.is_empty() {
+                    return Err(format!("`vars` type `{kind}` without values"));
+                }
+                if kind == "choice" {
+                    VarKind::Choice { values }
+                } else {
+                    VarKind::Random { values }
+                }
+            }
             other => return Err(format!("uses `vars` type `{other}`")),
         };
 

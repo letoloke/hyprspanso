@@ -39,7 +39,11 @@ fn main() -> Result<()> {
                 .unwrap_or(0),
             flag_value(&args, "--target"),
         ),
-        "picker" => picker::run(flag_value(&args, "--trigger"), flag_value(&args, "--target")),
+        "picker" => picker::run(
+            flag_value(&args, "--trigger"),
+            flag_value(&args, "--var"),
+            flag_value(&args, "--target"),
+        ),
         "launcher" => run_launcher(),
         "reload" => ipc_command("RELOAD", false),
         "toggle" => ipc_command("TOGGLE", true),
@@ -394,7 +398,9 @@ COMMANDS:
     list [filter]        Print loaded triggers/replacements
     search               Open the fuzzy search window (needs a terminal)
     form --trigger T     Fill a match's `form:` fields (used by the daemon)
-    picker --trigger T   Choose between matches sharing a trigger
+    picker --trigger T [--var NAME]
+                         Choose between matches sharing a trigger, or pick a
+                         `type: choice` variable's value
     launcher             Open the search window in a floating terminal
     reload               Ask the running daemon to reload match files
     toggle               Enable/disable expansion

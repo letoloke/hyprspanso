@@ -20,6 +20,13 @@ pub enum Event {
         index: usize,
         target: Option<String>,
     },
+    /// A value was picked for a `type: choice` variable.
+    PickVar {
+        trigger: String,
+        var: String,
+        index: usize,
+        target: Option<String>,
+    },
     FormValues {
         trigger: String,
         values: std::collections::HashMap<String, String>,

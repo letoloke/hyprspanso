@@ -282,6 +282,7 @@ Common causes:
 | trigger with `:` fails after a layout switch | fixed in 0.7.4/0.7.5: `error` events are ignored and each keyboard keeps its own layout group (refreshed every 30 s and on layout events) |
 | modifier stuck (text turns uppercase) | a second event node of the same keyboard was replaying presses after the real release; 0.7.1 reads one node per physical keyboard (echo nodes ignored, takeover after 2 s of silence) — upgrade and restart |
 | worked, then stopped silently | run `hyprspanso diag --keys` **before** restarting: `events` frozen means no keys reach the daemon; `events` growing with `held_mods` set means a lost key release; `buffer` staying at 0–1 with `last_decoded` incomplete means something is resetting the buffer (fixed in 0.5.3 for title changes) |
+| `type: choice` opens no window | the trigger has duplicates and the picker resolved to a different entry, or `params.values` is empty; `hyprspanso check` reports vars it could not load |
 | several snippets share a trigger | 0.7.0+ opens a picker (previously only the first match was used); type it and choose, or remove the duplicates |
 | search/picker/form window opens tiled | the floating rule is missing: run `hyprspanso setup-hyprland` (install.sh does this since 0.7.2) |
 | form window does not appear | the daemon launches it with `omarchy-launch-tui` (or `xdg-terminal-exec`); check `journalctl --user -u hyprspanso` for `cannot open form window` |

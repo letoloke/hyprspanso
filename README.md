@@ -35,10 +35,12 @@ binding, the Omarchy bar widget and troubleshooting.
 | `force_clipboard`   | ✅ (via `wl-copy` + paste, clipboard restored) |
 | `vars: type: date`  | ✅ (`format`, `offset`) |
 | `vars: type: echo`  | ✅ |
+| `vars: type: choice` | ✅ picker window |
+| `vars: type: random` | ✅ random value |
 | `form:` + `form_fields:` (`text`, `choice`, `list`) | ✅ interactive window |
 | `label`             | ✅ (search + picker) |
 | duplicate triggers  | ✅ disambiguation picker |
-| `vars: shell`, `random`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
+| `vars: shell`, `script`, `vars: type: form`, `type: markdown/image/html` | ❌ skipped and reported |
 
 ### Match disambiguation
 
@@ -56,6 +58,28 @@ picker with one row per candidate — espanso's behaviour:
 `↑↓` move, `1-9` pick directly, `Enter` inserts, `Esc` cancels. Rows show the
 `label` when present, otherwise the first line of the replacement (or the form
 template). Your config's many `airfm` variants work this way.
+
+### Choice variables
+
+`type: choice` opens the picker with the variable's values, then renders the
+replacement with the one you picked — the same window as match disambiguation:
+
+```yaml
+- trigger: "rerere"
+  replace: "{{output}}"
+  vars:
+    - name: output
+      type: choice
+      params:
+        values:
+          - "Huéspedes recomendados, muy amables, limpios y ordenados"
+          - "Todo muy bien, los recomiendo ampliamente"
+          - "ningún problema, super recomendados"
+```
+
+`type: random` takes the same `values:` but picks one automatically at
+expansion time (no window). A match with several `choice` variables asks for
+them one after another.
 
 ### Interactive forms
 

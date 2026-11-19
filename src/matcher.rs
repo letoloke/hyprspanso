@@ -57,10 +57,39 @@ pub fn find<'a>(entries: &'a [MatchEntry], index: &Index, buffer: &str) -> Optio
 
 /// Render `{{name}}` placeholders for the declared `vars`.
 pub fn render(entry: &MatchEntry) -> String {
-    render_at(entry, Local::now())
+    render_with(entry, Local::now(), &HashMap::new())
 }
 
 pub fn render_at(entry: &MatchEntry, now: DateTime<Local>) -> String {
+    render_with(entry, now, &HashMap::new())
+}
+
+/// First `choice` variable that still needs a value from the user.
+pub fn pending_choice<'a>(entry: &'a MatchEntry, chosen: &HashMap<String, String>) -> Option<&'a crate::config::Var> {
+    entry.vars.iter().find(|var| {
+        matches!(var.kind, VarKind::Choice { .. }) && !chosen.contains_key(&var.name)
+    })
+}
+
+pub fn choice_values(entry: &MatchEntry, name: &str) -> Vec<String> {
+    entry
+        .vars
+        .iter()
+        .find(|var| var.name == name)
+        .and_then(|var| match &var.kind {
+            VarKind::Choice { values } | VarKind::Random { values } => Some(values.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Render the template. `chosen` holds values the user picked for `choice`
+/// variables; they are rendered even if their placeholder is not at the end.
+pub fn render_with(
+    entry: &MatchEntry,
+    now: DateTime<Local>,
+    chosen: &HashMap<String, String>,
+) -> String {
     if entry.vars.is_empty() {
         return entry.replace.clone();
     }
@@ -72,10 +101,27 @@ pub fn render_at(entry: &MatchEntry, now: DateTime<Local>) -> String {
                 stamp.format(format).to_string()
             }
             VarKind::Echo { echo } => echo.clone(),
+            VarKind::Choice { values } => chosen
+                .get(&var.name)
+                .cloned()
+                .or_else(|| values.first().cloned())
+                .unwrap_or_default(),
+            VarKind::Random { values } => random_value(values),
         };
         out = out.replace(&format!("{{{{{}}}}}", var.name), &value);
     }
     out
+}
+
+fn random_value(values: &[String]) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0);
+    values[nanos % values.len()].clone()
 }
 
 /// Fill a `form:` template with the values the user typed.
