@@ -50,7 +50,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if report.trimmed > 0 {
         eprintln!(
-            "  {:4}  trailing whitespace removed from the trigger",
+            "  {:4}  whitespace removed from the trigger",
             report.trimmed
         );
     }
@@ -88,23 +88,20 @@ impl Report {
     }
 }
 
-/// Phone keyboards reject shortcut names with spaces. espanso triggers often
-/// end with one ("ytd ") to force a word boundary, which is safe to drop;
-/// triggers with *internal* spaces cannot be represented.
+/// Phone keyboards reject shortcut names containing whitespace, so all of it
+/// is removed ("my trigger" -> "mytrigger"). espanso triggers often use a
+/// trailing space to force a word boundary; internal spaces become part of a
+/// single word on the phone, which is the closest representable shortcut.
 fn clean_trigger(trigger: &str, report: &mut Report) -> Option<String> {
-    let trimmed = trigger.trim_end();
-    if trimmed.is_empty() {
+    let cleaned: String = trigger.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if cleaned.is_empty() {
         report.skip("empty trigger", trigger);
         return None;
     }
-    if trimmed.chars().any(char::is_whitespace) {
-        report.skip("trigger contains whitespace", trigger);
-        return None;
-    }
-    if trimmed.len() != trigger.len() {
+    if cleaned != trigger {
         report.trimmed += 1;
     }
-    Some(trimmed.to_string())
+    Some(cleaned)
 }
 
 fn leantype(entries: &[MatchEntry]) -> (String, Report) {
@@ -298,13 +295,17 @@ mod tests {
         }];
         let entries = vec![
             entry(":rm", "Ricardo"),
-            entry("with space", "nope"),
+            entry("with space", "collapsed"),
+            entry("trailing ", "trimmed"),
             dynamic,
         ];
         let (text, report) = leantype(&entries);
         assert!(text.contains("=== :rm ===\nRicardo\n"));
         assert!(text.contains("=== :date ===\n%date:yyyy-MM-dd%\n"));
-        assert_eq!(report.exported, 2);
-        assert_eq!(report.skipped.len(), 1);
+        assert!(text.contains("=== withspace ===\ncollapsed\n"));
+        assert!(text.contains("=== trailing ===\ntrimmed\n"));
+        assert_eq!(report.exported, 4);
+        assert_eq!(report.trimmed, 2);
+        assert!(report.skipped.is_empty());
     }
 }

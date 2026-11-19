@@ -61,9 +61,11 @@ What converts: `trigger`/`replace`, multi-line and unicode text, and
 `{{date}}` variables (`%Y-%m-%d` becomes `%date:yyyy-MM-dd%`).
 
 What is dropped, with a summary on stderr: `form:` matches, `choice`/`random`/
-`echo` variables, triggers with **internal** spaces (LeanType forbids spaces in
-names — trailing spaces are trimmed instead), and duplicate triggers (first
-wins). Obsolete matches (`href`, scripts) never leave the machine.
+`echo` variables, and duplicate triggers (first wins). Obsolete matches
+(`href`, scripts) never leave the machine. Triggers containing whitespace have
+it **removed** (`my trigger` → `mytrigger`, `ytd ` → `ytd`), because phone
+keyboards reject spaces in shortcut names; the report counts how many were
+adjusted.
 
 ### Finding duplicates
 

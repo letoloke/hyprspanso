@@ -1,6 +1,6 @@
 [package]
 name = "hyprspanso"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 description = "espanso-compatible trigger/replace text expander for Hyprland/Wayland"
 license = "MIT"
