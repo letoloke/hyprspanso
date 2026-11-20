@@ -49,11 +49,15 @@ snippets can. LeanType (F-Droid, GPL-3.0) has a text expander that is edited as
 plain text, which is exactly what `hyprspanso export` produces:
 
 ```bash
-hyprspanso export --output leantype.txt        # default format
-hyprspanso export --forms clipboard --output leantype.txt
-hyprspanso export --format tsv   --output snippets.tsv
-hyprspanso export --format json  --output snippets.json
+hyprspanso export                              # -> <config>/hyprspanso-snippets.txt
+hyprspanso export --forms clipboard            # forms use %clipboard%
+hyprspanso export --format tsv --output snippets.tsv
+hyprspanso export --stdout > snippets.txt      # print instead of writing
 ```
+
+By default the file lands **next to your match files** — with the usual setup
+that is `~/.config/espanso/hyprspanso-snippets.txt`, so a synced config folder
+(e.g. Google Drive via Insync) carries it to the phone automatically.
 
 Then on the phone: **LeanType → Settings → Text expander → "all shortcuts as
 text"**, paste the file's content, apply.
@@ -270,7 +274,7 @@ hyprspanso config            show where matches are read from
 hyprspanso config set DIR    point at another folder, saved for next start
 hyprspanso check             validate match files, list skipped matches
 hyprspanso list [filter]     print triggers
-hyprspanso export [--format leantype|tsv|json] [--output FILE]
+hyprspanso export [--format leantype|tsv|json] [--output FILE | --stdout]
                              Export snippets for a phone keyboard
 hyprspanso duplicates        find matches sharing an output text
 hyprspanso duplicates --triggers   find matches sharing a trigger

@@ -19,7 +19,19 @@ use std::path::PathBuf;
 
 pub fn run(args: &[String]) -> Result<()> {
     let format = flag(args, "--format").unwrap_or_else(|| "leantype".into());
-    let output = flag(args, "--output").map(PathBuf::from);
+    let root = config::config_root();
+
+    // Default destination: next to the match files, so a synced config folder
+    // carries the export with it. `--stdout` prints instead.
+    let output = if args.iter().any(|arg| arg == "--stdout") {
+        None
+    } else {
+        Some(
+            flag(args, "--output")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("hyprspanso-snippets.txt")),
+        )
+    };
     let forms = match flag(args, "--forms").unwrap_or_else(|| "placeholder".into()).as_str() {
         "placeholder" => FormMode::Placeholder,
         "clipboard" => FormMode::Clipboard,
@@ -36,7 +48,6 @@ pub fn run(args: &[String]) -> Result<()> {
     };
     let verbose = args.iter().any(|arg| arg == "-v" || arg == "--verbose");
 
-    let root = config::config_root();
     let set = config::load(&root);
 
     let mut report = Report::default();
