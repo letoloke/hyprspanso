@@ -1,7 +1,7 @@
 # Maintainer: Ricardo Molina <molina26ricardo@gmail.com>
 
 pkgname=hyprspanso
-pkgver=0.13.0
+pkgver=0.13.1
 pkgrel=1
 pkgdesc='espanso-compatible trigger/replace text expander for Hyprland/Wayland'
 arch=('x86_64' 'aarch64')
@@ -11,7 +11,7 @@ depends=('wtype' 'wl-clipboard' 'libxkbcommon')
 makedepends=('cargo' 'rust' 'pkgconf')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('3d009b9320d1471771b5a182b04c55737cf84dc9d416a28af966dd47cb03142f')
+sha256sums=('22001b6515bdd8fec86d85cf310148dfd45b19be20b95464bdc0ea8ec497486d')
 
 build() {
   cd "$pkgname-$pkgver"
