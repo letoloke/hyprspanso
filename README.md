@@ -59,7 +59,9 @@ Then on the phone: **LeanType → Settings → Text expander → "all shortcuts 
 text"**, paste the file's content, apply.
 
 What converts: `trigger`/`replace`, multi-line and unicode text, and
-`{{date}}` variables (`%Y-%m-%d` becomes `%date:yyyy-MM-dd%`).
+`{{date}}` variables (`%Y-%m-%d` becomes `%date:yyyy-MM-dd%`; literal text and
+emoji in the format stay outside the token, so
+`%F %H horas %M min ➡️` → `%date:yyyy-MM-dd HH% horas %date:mm% min ➡️`).
 
 Forms have no prompt on a phone keyboard, so their template is exported with
 the fields handled by `--forms`:
@@ -75,12 +77,15 @@ form on Android: copy the name to the clipboard, type `ingresoan1`, and the
 message goes out with that name in place.
 
 Duplicate triggers are **all exported**, numbered: `airfm`, `airfm2`, `airfm3`, …
-so the ten listing variants stay available; the plain name stays the first (and
-shortest) one. `--duplicates skip` keeps only the first instead.
+so every variant stays available; the plain name stays the first (and
+shortest) one. `choice`/`random` variables are expanded the same way — one
+numbered shortcut per value (`rerere`, `rerere2`, …). `--duplicates skip`
+keeps only the first of each. `-v` lists every skipped match by name.
 
-What is dropped, with a summary on stderr: `choice`/`random`/`echo` variables
-(the phone has no matching UI). Obsolete matches
-(`href`, scripts) never leave the machine. Triggers containing whitespace have
+Nothing is silently dropped: with the options above every match that has a
+static text (or a form template) is exported, and the report on stderr says how
+many triggers were collapsed, numbered or expanded. Obsolete matches (`href`,
+scripts) never leave the machine. Triggers containing whitespace have
 it **removed** (`my trigger` → `mytrigger`, `ytd ` → `ytd`), because phone
 keyboards reject spaces in shortcut names; the report counts how many were
 adjusted.

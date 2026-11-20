@@ -1,7 +1,7 @@
 //! Export snippets for use on a phone.
 //!
-//! The common target is LeanType (F-Droid, GPL-3.0), whose "all shortcuts as
-//! text" editor uses one block per shortcut:
+//! The target is LeanType (F-Droid, GPL-3.0), whose "bulk editor" is plain text,
+//! one block per shortcut:
 //!
 //! ```text
 //! === :rm ===
@@ -13,7 +13,7 @@
 
 use crate::config::{self, FormFieldKind, MatchEntry, VarKind};
 use anyhow::{bail, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -34,20 +34,22 @@ pub fn run(args: &[String]) -> Result<()> {
         "skip" => false,
         other => bail!("unknown --duplicates {other:?} (number, skip)"),
     };
+    let verbose = args.iter().any(|arg| arg == "-v" || arg == "--verbose");
 
     let root = config::config_root();
     let set = config::load(&root);
 
-    let (text, report) = match format.as_str() {
-        "leantype" | "lean" => leantype(&set.entries, forms, number_duplicates),
-        "tsv" | "tab" => tsv(&set.entries, forms, number_duplicates),
-        "json" => json(&set.entries, forms, number_duplicates),
+    let mut report = Report::default();
+    let text = match format.as_str() {
+        "leantype" | "lean" => leantype(&set.entries, forms, number_duplicates, &mut report),
+        "tsv" | "tab" => tsv(&set.entries, forms, number_duplicates, &mut report),
+        "json" => json(&set.entries, forms, number_duplicates, &mut report),
         other => bail!("unknown --format {other:?} (leantype, tsv, json)"),
     };
 
-    match output {
+    match &output {
         Some(path) => {
-            fs::write(&path, &text)?;
+            fs::write(path, &text)?;
             eprintln!("wrote {} ({} bytes)", path.display(), text.len());
         }
         None => print!("{text}"),
@@ -62,16 +64,21 @@ pub fn run(args: &[String]) -> Result<()> {
     for (reason, count) in report.reasons() {
         eprintln!("  {count:4}  {reason}");
     }
-    if report.trimmed > 0 {
-        eprintln!(
-            "  {:4}  whitespace removed from the trigger",
-            report.trimmed
-        );
+    if verbose {
+        for (reason, trigger) in &report.skipped {
+            eprintln!("        skipped {trigger:?}: {reason}");
+        }
     }
     if report.numbered > 0 {
         eprintln!(
             "  {:4}  duplicate trigger(s) numbered (airfm, airfm2, airfm3, …)",
             report.numbered
+        );
+    }
+    if report.variants > 0 {
+        eprintln!(
+            "  {:4}  extra variant(s) from choice/random variables",
+            report.variants
         );
     }
     if report.forms > 0 {
@@ -83,6 +90,12 @@ pub fn run(args: &[String]) -> Result<()> {
                 FormMode::Clipboard => "(placeholders became %clipboard%: copy the value, then expand)",
                 FormMode::Empty => "(placeholders removed)",
             }
+        );
+    }
+    if report.trimmed > 0 {
+        eprintln!(
+            "  {:4}  whitespace removed from the trigger",
+            report.trimmed
         );
     }
     Ok(())
@@ -97,11 +110,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FormMode {
-    /// Keep `[[name]]` visible so it can be replaced by hand.
     Placeholder,
-    /// Replace each field with LeanType's `%clipboard%`.
     Clipboard,
-    /// Drop the placeholders.
     Empty,
 }
 
@@ -111,6 +121,7 @@ struct Report {
     trimmed: usize,
     forms: usize,
     numbered: usize,
+    variants: usize,
     skipped: Vec<(&'static str, String)>,
 }
 
@@ -131,29 +142,13 @@ impl Report {
     }
 }
 
-/// Phone keyboards reject shortcut names containing whitespace, so all of it
-/// is removed ("my trigger" -> "mytrigger"). espanso triggers often use a
-/// trailing space to force a word boundary; internal spaces become part of a
-/// single word on the phone, which is the closest representable shortcut.
-fn clean_trigger(trigger: &str, report: &mut Report) -> Option<String> {
-    let cleaned: String = trigger.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if cleaned.is_empty() {
-        report.skip("empty trigger", trigger);
-        return None;
-    }
-    if cleaned != trigger {
-        report.trimmed += 1;
-    }
-    Some(cleaned)
-}
-
 /// Phone keyboards allow only one shortcut per name, so repeated triggers are
 /// exported with a number: `airfm`, `airfm2`, `airfm3`, … The first keeps the
 /// plain name so the most-used variant stays the shortest to type.
 fn number_trigger(
     base: &str,
     used: &mut HashSet<String>,
-    next: &mut std::collections::HashMap<String, usize>,
+    next: &mut HashMap<String, usize>,
     report: &mut Report,
 ) -> String {
     if used.insert(base.to_string()) {
@@ -171,55 +166,25 @@ fn number_trigger(
     }
 }
 
-fn leantype(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
-    let mut report = Report::default();
-    let mut used: HashSet<String> = HashSet::new();
-    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut out = String::new();
-
-    for entry in entries {
-        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
-            continue;
-        };
-        let trigger = if number_duplicates {
-            number_trigger(&base, &mut used, &mut next, &mut report)
-        } else {
-            if !used.insert(base.clone()) {
-                report.skip("duplicate trigger (kept the first)", &base);
-                continue;
-            }
-            base
-        };
-        let text = match body(entry, forms) {
-            Ok(text) => text,
-            Err(reason) => {
-                report.skip(reason, &trigger);
-                continue;
-            }
-        };
-        if text.trim().is_empty() {
-            report.skip("empty replacement", &trigger);
-            continue;
-        }
-        out.push_str(&format!("=== {trigger} ===\n{text}\n\n"));
-        report.exported += 1;
-        if entry.form.is_some() {
-            report.forms += 1;
-        }
+fn clean_trigger(trigger: &str, report: &mut Report) -> Option<String> {
+    let cleaned: String = trigger.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if cleaned.is_empty() {
+        report.skip("empty trigger", trigger);
+        return None;
     }
-
-    (out, report)
+    if cleaned != trigger {
+        report.trimmed += 1;
+    }
+    Some(cleaned)
 }
 
-/// Replacement text with espanso variables translated to LeanType's `%date%`.
-/// Replacement text for one match: variables translated, forms turned into a
-/// template with their fields handled according to `forms`.
-fn body(entry: &MatchEntry, forms: FormMode) -> Result<String, &'static str> {
+/// All texts one match can produce. Static matches give one; `choice`/`random`
+/// variables give one per value, so every option survives the export.
+fn variants(entry: &MatchEntry, forms: FormMode) -> Result<Vec<String>, &'static str> {
     if let Some(form) = &entry.form {
         let mut out = form.template.clone();
         for field in &form.fields {
             let value = match &field.kind {
-                // A choice has no prompt on the phone; use its first value.
                 FormFieldKind::Choice { values, .. } => {
                     values.first().cloned().unwrap_or_default()
                 }
@@ -231,146 +196,262 @@ fn body(entry: &MatchEntry, forms: FormMode) -> Result<String, &'static str> {
             };
             out = out.replace(&format!("[[{}]]", field.name), &value);
         }
-        return Ok(out);
+        return Ok(vec![out]);
     }
 
-    let mut out = entry.replace.clone();
+    let mut base = entry.replace.clone();
+    let mut choices: Vec<(String, Vec<String>)> = Vec::new();
+
     for var in &entry.vars {
-        let value = match &var.kind {
+        let placeholder = format!("{{{{{}}}}}", var.name);
+        match &var.kind {
             VarKind::Date { format, offset } => {
                 if *offset != 0 {
                     return Err("date offset not portable");
                 }
-                let pattern = strftime_to_java(format).ok_or("date format not portable")?;
-                // LeanType's %date:PATTERN% only accepts this character set.
-                let portable = pattern
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || " _():,./-".contains(ch));
-                if !portable {
-                    return Err("date format not portable");
-                }
-                format!("%date:{pattern}%")
+                base = base.replace(&placeholder, &date_placeholders(format)?);
             }
-            _ => return Err("non-date vars/forms"),
-        };
-        out = out.replace(&format!("{{{{{}}}}}", var.name), &value);
+            VarKind::Echo { echo } => {
+                base = base.replace(&placeholder, echo);
+            }
+            VarKind::Choice { values } | VarKind::Random { values } => {
+                choices.push((var.name.clone(), values.clone()));
+            }
+        }
     }
-    if out.contains("{{") {
-        return Err("unresolved placeholder");
+
+    // Cartesian product of the choice values, capped so a pathological match
+    // cannot produce hundreds of shortcuts.
+    let mut combos: Vec<HashMap<String, String>> = vec![HashMap::new()];
+    for (name, values) in &choices {
+        let mut next_combos = Vec::new();
+        for combo in &combos {
+            for value in values {
+                let mut copy = combo.clone();
+                copy.insert(name.clone(), value.clone());
+                next_combos.push(copy);
+            }
+        }
+        if next_combos.is_empty() {
+            return Err("choice variable without values");
+        }
+        if next_combos.len() > 64 {
+            return Err("too many choice combinations");
+        }
+        combos = next_combos;
+    }
+
+    let mut out = Vec::with_capacity(combos.len());
+    for combo in combos {
+        let mut text = base.clone();
+        for (name, value) in &combo {
+            text = text.replace(&format!("{{{{{}}}}}", name), value);
+        }
+        if text.contains("{{") {
+            return Err("unresolved placeholder");
+        }
+        out.push(text);
     }
     Ok(out)
 }
 
-/// strftime -> java.text.SimpleDateFormat, for the specifiers we support.
-fn strftime_to_java(format: &str) -> Option<String> {
-    let mut out = String::with_capacity(format.len());
-    let mut chars = format.chars();
+/// strftime -> LeanType's `%date:java-pattern%`, leaving literals outside the
+/// token so formats may contain emoji or arbitrary text:
+/// `%F %H horas %M min ➡️` -> `%date:yyyy-MM-dd% %date:HH% horas %date:mm% min ➡️`.
+fn date_placeholders(format: &str) -> Result<String, &'static str> {
+    let mut out = String::new();
+    let mut pattern = String::new();
+    let mut chars = format.chars().peekable();
 
     while let Some(ch) = chars.next() {
         if ch != '%' {
+            // Keep punctuation/space inside the token when another specifier
+            // follows, so `%Y-%m-%d` becomes one `%date:yyyy-MM-dd%`. Letters
+            // must stay outside or SimpleDateFormat reads them as patterns.
+            let safe = !ch.is_alphabetic() && " _():,./-".contains(ch);
+            if safe && !pattern.is_empty() && chars.peek() == Some(&'%') {
+                pattern.push(ch);
+                continue;
+            }
+            if !pattern.is_empty() {
+                out.push_str(&format!("%date:{pattern}%"));
+                pattern.clear();
+            }
             out.push(ch);
             continue;
         }
-        match chars.next()? {
-            'Y' => out.push_str("yyyy"),
-            'y' => out.push_str("yy"),
-            'm' => out.push_str("MM"),
-            'd' => out.push_str("dd"),
-            'e' => out.push('d'),
-            'H' => out.push_str("HH"),
-            'I' => out.push_str("hh"),
-            'M' => out.push_str("mm"),
-            'S' => out.push_str("ss"),
-            'p' => out.push('a'),
-            'A' => out.push_str("EEEE"),
-            'a' => out.push_str("EEE"),
-            'B' => out.push_str("MMMM"),
-            'b' | 'h' => out.push_str("MMM"),
-            'j' => out.push_str("DDD"),
-            'F' => out.push_str("yyyy-MM-dd"),
-            'T' => out.push_str("HH:mm:ss"),
-            'R' => out.push_str("HH:mm"),
-            'D' => out.push_str("MM/dd/yy"),
-            '%' => out.push('%'),
-            _ => return None,
-        }
+        let spec = chars.next().ok_or("date format ends with %")?;
+        let mapped = match spec {
+            'Y' => "yyyy",
+            'y' => "yy",
+            'm' => "MM",
+            'd' => "dd",
+            'e' => "d",
+            'H' => "HH",
+            'I' => "hh",
+            'M' => "mm",
+            'S' => "ss",
+            'p' => "a",
+            'A' => "EEEE",
+            'a' => "EEE",
+            'B' => "MMMM",
+            'b' | 'h' => "MMM",
+            'j' => "DDD",
+            'F' => "yyyy-MM-dd",
+            'T' => "HH:mm:ss",
+            'R' => "HH:mm",
+            'D' => "MM/dd/yy",
+            '%' => "%",
+            _ => return Err("date format not portable"),
+        };
+        pattern.push_str(mapped);
     }
-    Some(out)
+
+    if !pattern.is_empty() {
+        out.push_str(&format!("%date:{pattern}%"));
+    }
+    Ok(out)
 }
 
-fn tsv(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
-    let mut report = Report::default();
+fn leantype(
+    entries: &[MatchEntry],
+    forms: FormMode,
+    number_duplicates: bool,
+    report: &mut Report,
+) -> String {
     let mut used: HashSet<String> = HashSet::new();
-    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut next: HashMap<String, usize> = HashMap::new();
     let mut out = String::new();
+
     for entry in entries {
-        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
+        let Some(base) = clean_trigger(&entry.trigger, report) else {
             continue;
         };
-        let trigger = if number_duplicates {
-            number_trigger(&base, &mut used, &mut next, &mut report)
-        } else {
-            if !used.insert(base.clone()) {
-                report.skip("duplicate trigger (kept the first)", &base);
-                continue;
-            }
-            base
-        };
-        let body = match body(entry, forms) {
-            Ok(body) => body,
+        let texts = match variants(entry, forms) {
+            Ok(texts) => texts,
             Err(reason) => {
-                report.skip(reason, &trigger);
+                report.skip(reason, &base);
                 continue;
             }
         };
-        let flat = body.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n");
-        out.push_str(&format!("{trigger}\t{flat}\n"));
-        report.exported += 1;
-        if entry.form.is_some() {
-            report.forms += 1;
+
+        for (index, text) in texts.iter().enumerate() {
+            let trigger = if number_duplicates {
+                if index == 0 {
+                    number_trigger(&base, &mut used, &mut next, report)
+                } else {
+                    report.variants += 1;
+                    number_trigger(&base, &mut used, &mut next, report)
+                }
+            } else if index == 0 {
+                if !used.insert(base.clone()) {
+                    report.skip("duplicate trigger (kept the first)", &base);
+                    continue;
+                }
+                base.clone()
+            } else {
+                // With --duplicates skip, only the first variant is kept.
+                continue;
+            };
+
+            if text.trim().is_empty() {
+                report.skip("empty replacement", &trigger);
+                continue;
+            }
+            out.push_str(&format!("=== {trigger} ===\n{text}\n\n"));
+            report.exported += 1;
+            if entry.form.is_some() {
+                report.forms += 1;
+            }
         }
     }
-    (out, report)
+    out
 }
 
-fn json(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
-    let mut report = Report::default();
+fn tsv(
+    entries: &[MatchEntry],
+    forms: FormMode,
+    number_duplicates: bool,
+    report: &mut Report,
+) -> String {
     let mut used: HashSet<String> = HashSet::new();
-    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut items = Vec::new();
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let mut out = String::new();
+
     for entry in entries {
-        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
+        let Some(base) = clean_trigger(&entry.trigger, report) else {
             continue;
         };
-        let trigger = if number_duplicates {
-            number_trigger(&base, &mut used, &mut next, &mut report)
-        } else {
-            if !used.insert(base.clone()) {
-                report.skip("duplicate trigger (kept the first)", &base);
-                continue;
-            }
-            base
-        };
-        let body = match body(entry, forms) {
-            Ok(body) => body,
+        let texts = match variants(entry, forms) {
+            Ok(texts) => texts,
             Err(reason) => {
-                report.skip(reason, &trigger);
+                report.skip(reason, &base);
                 continue;
             }
         };
-        items.push(serde_json::json!({
-            "trigger": trigger,
-            "replace": body,
-            "word": entry.word,
-            "propagate_case": entry.propagate_case,
-        }));
-        report.exported += 1;
-        if entry.form.is_some() {
-            report.forms += 1;
+        for text in texts {
+            let trigger = if number_duplicates {
+                number_trigger(&base, &mut used, &mut next, report)
+            } else {
+                if !used.insert(base.clone()) {
+                    report.skip("duplicate trigger (kept the first)", &base);
+                    break;
+                }
+                base.clone()
+            };
+            let flat = text
+                .replace('\\', "\\\\")
+                .replace('\t', "\\t")
+                .replace('\n', "\\n");
+            out.push_str(&format!("{trigger}\t{flat}\n"));
+            report.exported += 1;
+        }
+    }
+    out
+}
+
+fn json(
+    entries: &[MatchEntry],
+    forms: FormMode,
+    number_duplicates: bool,
+    report: &mut Report,
+) -> String {
+    let mut used: HashSet<String> = HashSet::new();
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let mut items = Vec::new();
+
+    for entry in entries {
+        let Some(base) = clean_trigger(&entry.trigger, report) else {
+            continue;
+        };
+        let texts = match variants(entry, forms) {
+            Ok(texts) => texts,
+            Err(reason) => {
+                report.skip(reason, &base);
+                continue;
+            }
+        };
+        for text in texts {
+            let trigger = if number_duplicates {
+                number_trigger(&base, &mut used, &mut next, report)
+            } else {
+                if !used.insert(base.clone()) {
+                    report.skip("duplicate trigger (kept the first)", &base);
+                    break;
+                }
+                base.clone()
+            };
+            items.push(serde_json::json!({
+                "trigger": trigger,
+                "replace": text,
+                "word": entry.word,
+                "propagate_case": entry.propagate_case,
+            }));
+            report.exported += 1;
         }
     }
     let text = serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into());
-    (text + "\n", report)
+    text + "\n"
 }
 
 #[cfg(test)]
@@ -393,15 +474,37 @@ mod tests {
     }
 
     #[test]
-    fn converts_strftime_to_simpledateformat() {
-        assert_eq!(strftime_to_java("%Y-%m-%d").as_deref(), Some("yyyy-MM-dd"));
-        assert_eq!(strftime_to_java("%H:%M").as_deref(), Some("HH:mm"));
-        assert_eq!(strftime_to_java("%F %T").as_deref(), Some("yyyy-MM-dd HH:mm:ss"));
-        assert_eq!(strftime_to_java("%Q"), None);
+    fn date_fragments_keep_literals_outside() {
+        assert_eq!(
+            date_placeholders("%F %H horas %M min ➡️").as_deref(),
+            Ok("%date:yyyy-MM-dd HH% horas %date:mm% min ➡️")
+        );
+        assert_eq!(
+            date_placeholders("%Y-%m-%d").as_deref(),
+            Ok("%date:yyyy-MM-dd%")
+        );
+        assert!(date_placeholders("%Q").is_err());
     }
 
     #[test]
-    fn exports_forms_as_templates() {
+    fn choice_variables_become_numbered_variants() {
+        let mut e = entry("rerere", "{{output}}");
+        e.vars = vec![crate::config::Var {
+            name: "output".into(),
+            kind: VarKind::Choice {
+                values: vec!["one".into(), "two".into()],
+            },
+        }];
+        let mut report = Report::default();
+        let text = leantype(&[e], FormMode::Placeholder, true, &mut report);
+        assert!(text.contains("=== rerere ===\none\n"));
+        assert!(text.contains("=== rerere2 ===\ntwo\n"));
+        assert_eq!(report.exported, 2);
+        assert_eq!(report.variants, 1);
+    }
+
+    #[test]
+    fn forms_are_exported_as_templates() {
         use crate::config::{FormField, FormSpec};
 
         let mut form = entry("inforecepcion", "");
@@ -413,40 +516,30 @@ mod tests {
             }],
         });
 
-        let (placeholder, report) = leantype(&[form.clone()], FormMode::Placeholder, true);
+        let mut report = Report::default();
+        let placeholder = leantype(
+            &[form.clone()],
+            FormMode::Placeholder,
+            true,
+            &mut report,
+        );
         assert!(placeholder.contains("Hola [[name]]! Bienvenido"));
-        assert_eq!(report.forms, 1);
 
-        let (clipboard, _) = leantype(&[form.clone()], FormMode::Clipboard, true);
+        let clipboard =
+            leantype(&[form.clone()], FormMode::Clipboard, true, &mut report);
         assert!(clipboard.contains("Hola %clipboard%! Bienvenido"));
 
-        let (empty, _) = leantype(&[form], FormMode::Empty, true);
+        let empty = leantype(&[form], FormMode::Empty, true, &mut report);
         assert!(empty.contains("Hola ! Bienvenido"));
     }
 
     #[test]
-    fn exports_leantype_blocks_and_skips_unsupported() {
-        let mut dynamic = entry(":date", "{{d}}");
-        dynamic.vars = vec![crate::config::Var {
-            name: "d".into(),
-            kind: VarKind::Date {
-                format: "%Y-%m-%d".into(),
-                offset: 0,
-            },
-        }];
-        let entries = vec![
-            entry(":rm", "Ricardo"),
-            entry("with space", "collapsed"),
-            entry("trailing ", "trimmed"),
-            dynamic,
-        ];
-        let (text, report) = leantype(&entries, FormMode::Placeholder, true);
-        assert!(text.contains("=== :rm ===\nRicardo\n"));
-        assert!(text.contains("=== :date ===\n%date:yyyy-MM-dd%\n"));
+    fn whitespace_is_removed_from_triggers() {
+        let entries = vec![entry("with space", "collapsed"), entry("trailing ", "x")];
+        let mut report = Report::default();
+        let text = leantype(&entries, FormMode::Placeholder, true, &mut report);
         assert!(text.contains("=== withspace ===\ncollapsed\n"));
-        assert!(text.contains("=== trailing ===\ntrimmed\n"));
-        assert_eq!(report.exported, 4);
+        assert!(text.contains("=== trailing ===\nx\n"));
         assert_eq!(report.trimmed, 2);
-        assert!(report.skipped.is_empty());
     }
 }
