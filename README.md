@@ -74,8 +74,12 @@ Choice fields use their first value. `%clipboard%` is the closest thing to a
 form on Android: copy the name to the clipboard, type `ingresoan1`, and the
 message goes out with that name in place.
 
+Duplicate triggers are **all exported**, numbered: `airfm`, `airfm2`, `airfm3`, …
+so the ten listing variants stay available; the plain name stays the first (and
+shortest) one. `--duplicates skip` keeps only the first instead.
+
 What is dropped, with a summary on stderr: `choice`/`random`/`echo` variables
-and duplicate triggers (first wins). Obsolete matches
+(the phone has no matching UI). Obsolete matches
 (`href`, scripts) never leave the machine. Triggers containing whitespace have
 it **removed** (`my trigger` → `mytrigger`, `ytd ` → `ytd`), because phone
 keyboards reject spaces in shortcut names; the report counts how many were

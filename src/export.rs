@@ -26,14 +26,22 @@ pub fn run(args: &[String]) -> Result<()> {
         "empty" => FormMode::Empty,
         other => bail!("unknown --forms {other:?} (placeholder, clipboard, empty)"),
     };
+    let number_duplicates = match flag(args, "--duplicates")
+        .unwrap_or_else(|| "number".into())
+        .as_str()
+    {
+        "number" => true,
+        "skip" => false,
+        other => bail!("unknown --duplicates {other:?} (number, skip)"),
+    };
 
     let root = config::config_root();
     let set = config::load(&root);
 
     let (text, report) = match format.as_str() {
-        "leantype" | "lean" => leantype(&set.entries, forms),
-        "tsv" | "tab" => tsv(&set.entries, forms),
-        "json" => json(&set.entries, forms),
+        "leantype" | "lean" => leantype(&set.entries, forms, number_duplicates),
+        "tsv" | "tab" => tsv(&set.entries, forms, number_duplicates),
+        "json" => json(&set.entries, forms, number_duplicates),
         other => bail!("unknown --format {other:?} (leantype, tsv, json)"),
     };
 
@@ -58,6 +66,12 @@ pub fn run(args: &[String]) -> Result<()> {
         eprintln!(
             "  {:4}  whitespace removed from the trigger",
             report.trimmed
+        );
+    }
+    if report.numbered > 0 {
+        eprintln!(
+            "  {:4}  duplicate trigger(s) numbered (airfm, airfm2, airfm3, …)",
+            report.numbered
         );
     }
     if report.forms > 0 {
@@ -96,6 +110,7 @@ struct Report {
     exported: usize,
     trimmed: usize,
     forms: usize,
+    numbered: usize,
     skipped: Vec<(&'static str, String)>,
 }
 
@@ -132,19 +147,49 @@ fn clean_trigger(trigger: &str, report: &mut Report) -> Option<String> {
     Some(cleaned)
 }
 
-fn leantype(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
+/// Phone keyboards allow only one shortcut per name, so repeated triggers are
+/// exported with a number: `airfm`, `airfm2`, `airfm3`, … The first keeps the
+/// plain name so the most-used variant stays the shortest to type.
+fn number_trigger(
+    base: &str,
+    used: &mut HashSet<String>,
+    next: &mut std::collections::HashMap<String, usize>,
+    report: &mut Report,
+) -> String {
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    report.numbered += 1;
+    let mut n = next.get(base).copied().unwrap_or(1) + 1;
+    loop {
+        let candidate = format!("{base}{n}");
+        if used.insert(candidate.clone()) {
+            next.insert(base.to_string(), n);
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+fn leantype(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
     let mut report = Report::default();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut used: HashSet<String> = HashSet::new();
+    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut out = String::new();
 
     for entry in entries {
-        let Some(trigger) = clean_trigger(&entry.trigger, &mut report) else {
+        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
             continue;
         };
-        if !seen.insert(trigger.clone()) {
-            report.skip("duplicate trigger (kept the first)", &trigger);
-            continue;
-        }
+        let trigger = if number_duplicates {
+            number_trigger(&base, &mut used, &mut next, &mut report)
+        } else {
+            if !used.insert(base.clone()) {
+                report.skip("duplicate trigger (kept the first)", &base);
+                continue;
+            }
+            base
+        };
         let text = match body(entry, forms) {
             Ok(text) => text,
             Err(reason) => {
@@ -253,18 +298,24 @@ fn strftime_to_java(format: &str) -> Option<String> {
     Some(out)
 }
 
-fn tsv(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
+fn tsv(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
     let mut report = Report::default();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut used: HashSet<String> = HashSet::new();
+    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut out = String::new();
     for entry in entries {
-        let Some(trigger) = clean_trigger(&entry.trigger, &mut report) else {
+        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
             continue;
         };
-        if !seen.insert(trigger.clone()) {
-            report.skip("duplicate trigger (kept the first)", &trigger);
-            continue;
-        }
+        let trigger = if number_duplicates {
+            number_trigger(&base, &mut used, &mut next, &mut report)
+        } else {
+            if !used.insert(base.clone()) {
+                report.skip("duplicate trigger (kept the first)", &base);
+                continue;
+            }
+            base
+        };
         let body = match body(entry, forms) {
             Ok(body) => body,
             Err(reason) => {
@@ -282,12 +333,23 @@ fn tsv(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
     (out, report)
 }
 
-fn json(entries: &[MatchEntry], forms: FormMode) -> (String, Report) {
+fn json(entries: &[MatchEntry], forms: FormMode, number_duplicates: bool) -> (String, Report) {
     let mut report = Report::default();
+    let mut used: HashSet<String> = HashSet::new();
+    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut items = Vec::new();
     for entry in entries {
-        let Some(trigger) = clean_trigger(&entry.trigger, &mut report) else {
+        let Some(base) = clean_trigger(&entry.trigger, &mut report) else {
             continue;
+        };
+        let trigger = if number_duplicates {
+            number_trigger(&base, &mut used, &mut next, &mut report)
+        } else {
+            if !used.insert(base.clone()) {
+                report.skip("duplicate trigger (kept the first)", &base);
+                continue;
+            }
+            base
         };
         let body = match body(entry, forms) {
             Ok(body) => body,
@@ -351,14 +413,14 @@ mod tests {
             }],
         });
 
-        let (placeholder, report) = leantype(&[form.clone()], FormMode::Placeholder);
+        let (placeholder, report) = leantype(&[form.clone()], FormMode::Placeholder, true);
         assert!(placeholder.contains("Hola [[name]]! Bienvenido"));
         assert_eq!(report.forms, 1);
 
-        let (clipboard, _) = leantype(&[form.clone()], FormMode::Clipboard);
+        let (clipboard, _) = leantype(&[form.clone()], FormMode::Clipboard, true);
         assert!(clipboard.contains("Hola %clipboard%! Bienvenido"));
 
-        let (empty, _) = leantype(&[form], FormMode::Empty);
+        let (empty, _) = leantype(&[form], FormMode::Empty, true);
         assert!(empty.contains("Hola ! Bienvenido"));
     }
 
@@ -378,7 +440,7 @@ mod tests {
             entry("trailing ", "trimmed"),
             dynamic,
         ];
-        let (text, report) = leantype(&entries, FormMode::Placeholder);
+        let (text, report) = leantype(&entries, FormMode::Placeholder, true);
         assert!(text.contains("=== :rm ===\nRicardo\n"));
         assert!(text.contains("=== :date ===\n%date:yyyy-MM-dd%\n"));
         assert!(text.contains("=== withspace ===\ncollapsed\n"));
