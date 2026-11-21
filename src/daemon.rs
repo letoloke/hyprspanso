@@ -842,11 +842,11 @@ impl Engine {
                 .map(|(_, _, address)| address)
                 .unwrap_or_default();
             self.buffer.clear();
-            self.queue(Job {
-                text: String::new(),
-                backspaces,
-                clipboard: false,
-            });
+            // Erase synchronously: the picker window will take focus, and any
+            // keystroke still queued would land there instead of here.
+            if let Err(err) = crate::inject::erase(backspaces) {
+                eprintln!("hyprspanso: could not erase trigger: {err:#}");
+            }
             self.choice_flows.insert(
                 trigger.clone(),
                 ChoiceFlow {
@@ -869,11 +869,9 @@ impl Engine {
                     .map(|(_, _, address)| address)
                     .unwrap_or_default();
                 self.buffer.clear();
-                self.queue(Job {
-                    text: String::new(),
-                    backspaces,
-                    clipboard: false,
-                });
+                if let Err(err) = crate::inject::erase(backspaces) {
+                    eprintln!("hyprspanso: could not erase trigger: {err:#}");
+                }
                 if let Err(err) = launch_picker(&trigger, None, &target) {
                     eprintln!("hyprspanso: cannot open picker window: {err:#}");
                 }
@@ -890,11 +888,9 @@ impl Engine {
                 .map(|(_, _, address)| address)
                 .unwrap_or_default();
             self.buffer.clear();
-            self.queue(Job {
-                text: String::new(),
-                backspaces,
-                clipboard: false,
-            });
+            if let Err(err) = crate::inject::erase(backspaces) {
+                eprintln!("hyprspanso: could not erase trigger: {err:#}");
+            }
             if let Err(err) = launch_form_window(&trigger, 0, &target) {
                 eprintln!("hyprspanso: cannot open form window: {err:#}");
             }

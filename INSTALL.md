@@ -285,6 +285,7 @@ Common causes:
 | `type: choice` opens no window | the trigger has duplicates and the picker resolved to a different entry, or `params.values` is empty; `hyprspanso check` reports vars it could not load |
 | several snippets share a trigger | 0.7.0+ opens a picker (previously only the first match was used); type it and choose, or remove the duplicates |
 | search/picker/form window opens tiled | the floating rule is missing: run `hyprspanso setup-hyprland` (install.sh does this since 0.7.2) |
+| part of the trigger remains ("ingr" before the form text) | fixed in 0.14.0: the trigger was erased while the picker/form window was taking focus, so the last backspaces landed in the window. It is erased synchronously now |
 | form window does not appear | the daemon launches it with `omarchy-launch-tui` (or `xdg-terminal-exec`); check `journalctl --user -u hyprspanso` for `cannot open form window` |
 | triggers fail only in some apps | 0.5.3 fixed window-title changes resetting the trigger buffer (`activewindow` also fires on title updates); upgrade |
 | one match never fires | it uses `vars: shell`/`random`, `form:`, or `type: markdown` — see `hyprspanso check` |

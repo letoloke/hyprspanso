@@ -70,6 +70,13 @@ fn wtype(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Synchronous erase, used before opening a picker/form window: the window
+/// takes focus, so the backspaces must all land in the window that typed the
+/// trigger.
+pub fn erase(count: usize) -> Result<()> {
+    backspaces(count)
+}
+
 fn backspaces(count: usize) -> Result<()> {
     if count == 0 {
         return Ok(());
