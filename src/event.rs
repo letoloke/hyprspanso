@@ -29,6 +29,7 @@ pub enum Event {
     },
     FormValues {
         trigger: String,
+        index: usize,
         values: std::collections::HashMap<String, String>,
         target: Option<String>,
     },

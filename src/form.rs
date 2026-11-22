@@ -80,6 +80,7 @@ pub fn run(trigger: Option<String>, index: usize, target: Option<String>) -> Res
 
     let mut app = FormApp {
         trigger,
+        index,
         target,
         spec,
         fields,
@@ -97,6 +98,7 @@ pub fn run(trigger: Option<String>, index: usize, target: Option<String>) -> Res
 
 struct FormApp {
     trigger: String,
+    index: usize,
     target: Option<String>,
     spec: config::FormSpec,
     fields: Vec<FieldState>,
@@ -207,7 +209,7 @@ impl FormApp {
             writeln!(stream, "TARGET\t{target}")?;
         }
         let json = serde_json::to_string(&values)?;
-        writeln!(stream, "FORM\t{}\t{json}", self.trigger)?;
+        writeln!(stream, "FORM\t{}\t{}\t{json}", self.trigger, self.index)?;
         stream.flush()?;
         Ok(())
     }

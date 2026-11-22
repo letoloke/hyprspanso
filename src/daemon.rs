@@ -253,15 +253,23 @@ fn handle_client(stream: UnixStream, tx: Sender<Event>, shared: Shared) {
         } else if let Some(rest) = line.strip_prefix("PICK\t") {
             selection = Some(parse_choice(rest));
         } else if let Some(rest) = line.strip_prefix("FORM\t") {
-            if let Some((trigger, json)) = rest.split_once('\t') {
-                let values = serde_json::from_str::<HashMap<String, String>>(json)
-                    .unwrap_or_default();
-                let _ = tx.send(Event::FormValues {
-                    trigger: trigger.to_string(),
-                    values,
-                    target: target.clone(),
-                });
-            }
+            // FORM<trigger>\t<index>\t<json>; the index picks the variant in
+            // the trigger group (e.g. Spanish vs English form).
+            let mut parts = rest.splitn(3, '\t');
+            let trigger = parts.next().unwrap_or_default().to_string();
+            let second = parts.next().unwrap_or_default();
+            let (index, json) = match second.parse::<usize>() {
+                Ok(index) => (index, parts.next().unwrap_or("{}")),
+                Err(_) => (0, second),
+            };
+            let values =
+                serde_json::from_str::<HashMap<String, String>>(json).unwrap_or_default();
+            let _ = tx.send(Event::FormValues {
+                trigger,
+                index,
+                values,
+                target: target.clone(),
+            });
         } else if line == "RELOAD" {
             let _ = tx.send(Event::Reload);
             let _ = writeln!(writer, "ok");
@@ -406,6 +414,17 @@ fn ensure_wayland_env() {
 struct ChoiceFlow {
     chosen: HashMap<String, String>,
     target: String,
+    index: usize,
+}
+
+impl Engine {
+    /// Position of `entry` inside its trigger group (disambiguation index).
+    fn relation_of(&self, entry: &MatchEntry) -> usize {
+        self.entries_for(&entry.trigger)
+            .iter()
+            .position(|candidate| std::ptr::eq(*candidate, entry))
+            .unwrap_or(0)
+    }
 }
 
 struct Engine {
@@ -564,9 +583,10 @@ impl Engine {
             } => self.pick_var(&trigger, &var, index, target.as_deref()),
             Event::FormValues {
                 trigger,
+                index,
                 values,
                 target,
-            } => self.form_submit(&trigger, &values, target.as_deref()),
+            } => self.form_submit(&trigger, index, &values, target.as_deref()),
         }
     }
 
@@ -607,6 +627,7 @@ impl Engine {
                 ChoiceFlow {
                     chosen: HashMap::new(),
                     target: address.clone(),
+                    index,
                 },
             );
             if let Err(err) = launch_picker(&trigger, Some(&var_name), &address) {
@@ -648,10 +669,12 @@ impl Engine {
     fn form_submit(
         &mut self,
         trigger: &str,
+        index: usize,
         values: &HashMap<String, String>,
         target: Option<&str>,
     ) {
-        let Some(entry) = self.entries.iter().find(|entry| entry.trigger == trigger) else {
+        let group = self.entries_for(trigger);
+        let Some(entry) = group.get(index).or_else(|| group.first()).copied() else {
             eprintln!("hyprspanso: form trigger no longer exists: {trigger}");
             return;
         };
@@ -679,11 +702,24 @@ impl Engine {
     }
 
     fn pick_var(&mut self, trigger: &str, var: &str, index: usize, target: Option<&str>) {
-        let Some(entry) = self.entries.iter().find(|entry| entry.trigger == trigger) else {
+        let flow_entry = self
+            .choice_flows
+            .get(trigger)
+            .map(|flow| flow.index)
+            .unwrap_or(0);
+
+        // Clone the variant so the flow map can be mutated below.
+        let group = self.entries_for(trigger);
+        let Some(entry) = group
+            .get(flow_entry)
+            .or_else(|| group.first())
+            .map(|entry| (*entry).clone())
+        else {
             eprintln!("hyprspanso: choice trigger no longer exists: {trigger}");
             return;
         };
-        let values = matcher::choice_values(entry, var);
+
+        let values = matcher::choice_values(&entry, var);
         let Some(value) = values.get(index).cloned() else {
             eprintln!("hyprspanso: choice value {index} out of range for {var}");
             return;
@@ -695,6 +731,7 @@ impl Engine {
             .or_insert_with(|| ChoiceFlow {
                 chosen: HashMap::new(),
                 target: target.map(str::to_string).unwrap_or_default(),
+                index: flow_entry,
             });
         if flow.target.is_empty() {
             if let Some(target) = target {
@@ -703,7 +740,7 @@ impl Engine {
         }
         flow.chosen.insert(var.to_string(), value);
 
-        if let Some(next) = matcher::pending_choice(entry, &flow.chosen) {
+        if let Some(next) = matcher::pending_choice(&entry, &flow.chosen) {
             let next_name = next.name.clone();
             let target = flow.target.clone();
             if let Err(err) = launch_picker(trigger, Some(&next_name), &target) {
@@ -715,7 +752,7 @@ impl Engine {
         let Some(flow) = self.choice_flows.remove(trigger) else {
             return;
         };
-        let text = matcher::render_with(entry, chrono::Local::now(), &flow.chosen);
+        let text = matcher::render_with(&entry, chrono::Local::now(), &flow.chosen);
         let clipboard = entry.force_clipboard || text.chars().count() > 120;
         self.shared.diag.matches.fetch_add(1, Ordering::Relaxed);
 
@@ -843,6 +880,7 @@ impl Engine {
         }
         if let Some(var) = matcher::pending_choice(hit.entry, &HashMap::new()) {
             let var_name = var.name.clone();
+            let relation = self.relation_of(hit.entry);
             let backspaces = hit.backspaces;
             let trigger = hit.entry.trigger.clone();
             let target = crate::hypr::active_window()
@@ -859,6 +897,7 @@ impl Engine {
                 ChoiceFlow {
                     chosen: HashMap::new(),
                     target: target.clone(),
+                    index: relation,
                 },
             );
             if let Err(err) = launch_picker(&trigger, Some(&var_name), &target) {

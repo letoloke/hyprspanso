@@ -285,6 +285,7 @@ Common causes:
 | `type: choice` opens no window | the trigger has duplicates and the picker resolved to a different entry, or `params.values` is empty; `hyprspanso check` reports vars it could not load |
 | several snippets share a trigger | 0.7.0+ opens a picker (previously only the first match was used); type it and choose, or remove the duplicates |
 | search/picker/form window opens tiled | the floating rule is missing: run `hyprspanso setup-hyprland` (install.sh does this since 0.7.2) |
+| bilingual form always inserts the Spanish/other variant | fixed in 0.15.2: the form window did not send which variant it was editing, so the daemon rendered the first one. |
 | picker choice is not remembered | fixed in 0.15.1: the daemon's `ProtectHome=read-only` sandbox blocked the picker from writing `~/.local/state/hyprspanso/choices.json`; the unit now allows that path |
 | part of the trigger remains ("ingr" before the form text) | fixed in 0.14.0: the trigger was erased while the picker/form window was taking focus, so the last backspaces landed in the window. It is erased synchronously now |
 | form window does not appear | the daemon launches it with `omarchy-launch-tui` (or `xdg-terminal-exec`); check `journalctl --user -u hyprspanso` for `cannot open form window` |
