@@ -834,6 +834,13 @@ impl Engine {
         let Some(hit) = matcher::find(&self.entries, &self.index, &self.buffer) else {
             return;
         };
+        if debug() {
+            eprintln!(
+                "hyprspanso: hit {:?} group={}",
+                hit.entry.trigger,
+                self.entries_for(&hit.entry.trigger).len()
+            );
+        }
         if let Some(var) = matcher::pending_choice(hit.entry, &HashMap::new()) {
             let var_name = var.name.clone();
             let backspaces = hit.backspaces;
