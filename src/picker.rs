@@ -14,6 +14,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use ratatui::Frame;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub fn run(trigger: Option<String>, var: Option<String>, target: Option<String>) -> Result<()> {
@@ -50,14 +51,26 @@ pub fn run(trigger: Option<String>, var: Option<String>, target: Option<String>)
         let _ = writeln!(stream, "SEARCH");
     }
 
+    // Preselect the row chosen last time for this trigger.
+    let preferred = if var.is_none() {
+        remembered_choice(&trigger).and_then(|(index, signature)| {
+            group
+                .iter()
+                .position(|entry| config::entry_signature(entry) == signature)
+                .or_else(|| (index < group.len()).then_some(index))
+        })
+    } else {
+        None
+    };
+
     let mut app = PickerApp {
         trigger,
         var,
         target,
         group,
         values,
-        selected: 0,
-        list_state: ListState::default().with_selected(Some(0)),
+        selected: preferred.unwrap_or(0),
+        list_state: ListState::default().with_selected(preferred.or(Some(0))),
         status: if stream.is_some() {
             "choose · ↑↓ then Enter".to_string()
         } else {
@@ -152,6 +165,11 @@ impl PickerApp {
             anyhow::bail!("daemon not running");
         };
         let index = self.selected;
+        if self.var.is_none() {
+            if let Some(entry) = self.group.get(index) {
+                remember_choice(&self.trigger, index, &config::entry_signature(entry));
+            }
+        }
         if let Some(target) = &self.target {
             writeln!(stream, "TARGET\t{target}")?;
         }
@@ -293,5 +311,50 @@ impl PickerApp {
             )),
         ]);
         frame.render_widget(footer, areas[2]);
+    }
+}
+
+/// Small state file: which row was picked last for each trigger.
+fn choices_path() -> PathBuf {
+    let base = std::env::var("XDG_STATE_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty() && PathBuf::from(value).is_absolute())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                .join(".local/state")
+        });
+    base.join("hyprspanso").join("choices.json")
+}
+
+fn remembered_choice(trigger: &str) -> Option<(usize, String)> {
+    let text = std::fs::read_to_string(choices_path()).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let entry = value.get(trigger)?;
+    let index = entry.get("index")?.as_u64()? as usize;
+    let signature = entry.get("sig")?.as_str()?.to_string();
+    Some((index, signature))
+}
+
+fn remember_choice(trigger: &str, index: usize, signature: &str) {
+    let path = choices_path();
+    let mut value: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    map.insert(
+        trigger.to_string(),
+        serde_json::json!({ "index": index, "sig": signature }),
+    );
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&value) {
+        let _ = std::fs::write(&path, text + "\n");
     }
 }

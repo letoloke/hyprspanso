@@ -123,6 +123,12 @@ picker with one row per candidate — espanso's behaviour:
 `label` when present, otherwise the first line of the replacement (or the form
 template). Your config's many `airfm` variants work this way.
 
+The row you pick is **remembered per trigger** (in
+`~/.local/state/hyprspanso/choices.json`) and preselected the next time, so
+choosing the English variant of `ingresoan6 ` once keeps it selected. Entries
+are matched by their visible text, so adding or reordering matches does not
+point at the wrong variant.
+
 ### Choice variables
 
 `type: choice` opens the picker with the variable's values, then renders the

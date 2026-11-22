@@ -755,3 +755,20 @@ mod duplicate_tests {
         assert_eq!(exact[0], vec![2, 3]);
     }
 }
+
+/// Stable-ish identity of one match inside a trigger group, used to
+/// preselect the disambiguation picker the next time. Uses the visible body
+/// (form template or replacement), so reordering entries or adding others does
+/// not point at the wrong variant.
+pub fn entry_signature(entry: &MatchEntry) -> String {
+    let body = match &entry.form {
+        Some(form) => form.template.clone(),
+        None => entry.replace.clone(),
+    };
+    body.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect()
+}
